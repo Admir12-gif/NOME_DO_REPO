@@ -39,7 +39,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import type { Viagem, Cliente, Veiculo, Motorista, Rota } from "@/lib/types"
+import type { Viagem, Cliente, Veiculo, Motorista, Rota, PontoIntermediario } from "@/lib/types"
 import { 
   Route, 
   Plus, 
@@ -104,6 +104,13 @@ function formatCurrency(value: number) {
 function formatDate(dateStr: string | null) {
   if (!dateStr) return "-"
   return new Date(dateStr).toLocaleDateString("pt-BR")
+}
+
+function formatPontosIntermediarios(pontos?: PontoIntermediario[] | null) {
+  if (!pontos || pontos.length === 0) return null
+  return pontos
+    .map((ponto) => `${ponto.cidade}/${ponto.estado}`)
+    .join(" • ")
 }
 
 export function ViagensClient({ 
@@ -446,6 +453,12 @@ export function ViagensClient({
                               {viagem.status}
                             </Badge>
                           </div>
+                          {formatPontosIntermediarios(viagem.rota?.pontos_intermediarios) && (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                              <span className="font-medium text-foreground/80">Pontos intermediarios:</span>
+                              <span>{formatPontosIntermediarios(viagem.rota?.pontos_intermediarios)}</span>
+                            </div>
+                          )}
                           <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
                             <span className="flex items-center gap-1">
                               <Users className="h-3 w-3" />
