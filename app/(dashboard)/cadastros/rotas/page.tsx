@@ -9,5 +9,10 @@ export default async function RotasPage() {
     .select("*")
     .order("nome", { ascending: true })
 
-  return <RotasClient initialRotas={rotas || []} />
+  const { data: postos } = await supabase
+    .from("postos_abastecimento")
+    .select("*")
+    .order("nome", { ascending: true })
+
+  return <RotasClient initialRotas={rotas || []} initialPostos={postos || []} />
 }

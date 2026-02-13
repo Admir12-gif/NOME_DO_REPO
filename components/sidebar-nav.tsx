@@ -58,6 +58,7 @@ const navItems: NavItem[] = [
       { title: "Veiculos", href: "/cadastros/veiculos" },
       { title: "Motoristas", href: "/cadastros/motoristas" },
       { title: "Rotas", href: "/cadastros/rotas" },
+      { title: "Postos de Abastecimento", href: "/cadastros/postos_abastecimento" },
     ],
   },
   {

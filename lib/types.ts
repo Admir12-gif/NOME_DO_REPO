@@ -38,6 +38,16 @@ export interface Motorista {
   updated_at: string
 }
 
+export interface PostoAbastecimento {
+  id: string
+  user_id: string
+  nome: string
+  localidade: string | null
+  referencia: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface PontoIntermediario {
   cidade: string
   estado: string
@@ -59,6 +69,8 @@ export interface Rota {
   pontos_intermediarios: PontoIntermediario[] | null
   created_at: string
   updated_at: string
+  // Joined fields
+  postos?: PostoAbastecimento[]
 }
 
 export interface Viagem {
@@ -144,6 +156,7 @@ export interface Abastecimento {
   id: string
   user_id: string
   veiculo_id: string
+  viagem_id?: string | null
   data: string
   hodometro: number
   litros: number

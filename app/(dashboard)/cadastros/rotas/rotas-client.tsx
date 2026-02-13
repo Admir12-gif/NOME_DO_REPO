@@ -34,11 +34,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import type { Rota, PontoIntermediario } from "@/lib/types"
+import type { Rota, PontoIntermediario, PostoAbastecimento } from "@/lib/types"
 import { Route, ArrowRight, Plus, X, GripVertical } from "lucide-react"
 
 interface RotasClientProps {
   initialRotas: Rota[]
+  initialPostos: PostoAbastecimento[]
 }
 
 const ESTADOS = [
@@ -54,8 +55,9 @@ function formatCurrency(value: number) {
   }).format(value)
 }
 
-export function RotasClient({ initialRotas }: RotasClientProps) {
+export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
   const [rotas, setRotas] = useState(initialRotas)
+  const [postos, setPostos] = useState(initialPostos)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [selectedRota, setSelectedRota] = useState<Rota | null>(null)
@@ -69,8 +71,8 @@ export function RotasClient({ initialRotas }: RotasClientProps) {
     km_planejado: "",
     pedagio_planejado: "",
     tempo_ciclo_esperado_horas: "",
-    locais_abastecimento: "",
   })
+  const [selectedPostos, setSelectedPostos] = useState<string[]>([])
   const [pontosIntermediarios, setPontosIntermediarios] = useState<PontoIntermediario[]>([])
 
   const resetForm = () => {
@@ -83,8 +85,8 @@ export function RotasClient({ initialRotas }: RotasClientProps) {
       km_planejado: "",
       pedagio_planejado: "",
       tempo_ciclo_esperado_horas: "",
-      locais_abastecimento: "",
     })
+    setSelectedPostos([])
     setPontosIntermediarios([])
     setSelectedRota(null)
   }
@@ -105,8 +107,8 @@ export function RotasClient({ initialRotas }: RotasClientProps) {
       km_planejado: rota.km_planejado?.toString() || "",
       pedagio_planejado: rota.pedagio_planejado?.toString() || "",
       tempo_ciclo_esperado_horas: rota.tempo_ciclo_esperado_horas?.toString() || "",
-      locais_abastecimento: rota.locais_abastecimento || "",
     })
+    setSelectedPostos(rota.postos?.map(p => p.id) || [])
     setPontosIntermediarios(rota.pontos_intermediarios || [])
     setIsDialogOpen(true)
   }
@@ -169,7 +171,7 @@ export function RotasClient({ initialRotas }: RotasClientProps) {
       km_planejado: formData.km_planejado ? parseFloat(formData.km_planejado) : null,
       pedagio_planejado: formData.pedagio_planejado ? parseFloat(formData.pedagio_planejado) : null,
       tempo_ciclo_esperado_horas: formData.tempo_ciclo_esperado_horas ? parseFloat(formData.tempo_ciclo_esperado_horas) : null,
-      locais_abastecimento: formData.locais_abastecimento || null,
+      locais_abastecimento: null, // Deprecated - using rota_postos junction table now
       pontos_intermediarios: validPontos.length > 0 ? validPontos : [],
       user_id: user.id,
       updated_at: new Date().toISOString(),
@@ -184,6 +186,19 @@ export function RotasClient({ initialRotas }: RotasClientProps) {
         .single()
 
       if (!error && data) {
+        // Delete old rota_postos entries
+        await supabase.from("rota_postos").delete().eq("rota_id", selectedRota.id)
+        
+        // Insert new rota_postos entries
+        if (selectedPostos.length > 0) {
+          const rotaPostosData = selectedPostos.map((postoId, index) => ({
+            rota_id: selectedRota.id,
+            posto_id: postoId,
+            ordem: index,
+          }))
+          await supabase.from("rota_postos").insert(rotaPostosData)
+        }
+        
         setRotas(rotas.map(r => r.id === selectedRota.id ? data : r))
       }
     } else {
@@ -194,6 +209,16 @@ export function RotasClient({ initialRotas }: RotasClientProps) {
         .single()
 
       if (!error && data) {
+        // Insert rota_postos entries
+        if (selectedPostos.length > 0) {
+          const rotaPostosData = selectedPostos.map((postoId, index) => ({
+            rota_id: data.id,
+            posto_id: postoId,
+            ordem: index,
+          }))
+          await supabase.from("rota_postos").insert(rotaPostosData)
+        }
+        
         setRotas([...rotas, data])
       }
     }
@@ -436,14 +461,33 @@ export function RotasClient({ initialRotas }: RotasClientProps) {
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="locais_abastecimento">Locais de Abastecimento</Label>
-              <Textarea
-                id="locais_abastecimento"
-                value={formData.locais_abastecimento}
-                onChange={(e) => setFormData({ ...formData, locais_abastecimento: e.target.value })}
-                placeholder="Ex: Posto Shell KM 150, Posto BR KM 320"
-                rows={2}
-              />
+              <Label>Postos de Abastecimento</Label>
+              <div className="flex flex-wrap gap-2 p-3 min-h-[100px] rounded-md border border-input bg-background">
+                {postos.map((posto) => {
+                  const isSelected = selectedPostos.includes(posto.id)
+                  return (
+                    <Button
+                      key={posto.id}
+                      type="button"
+                      variant={isSelected ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => {
+                        setSelectedPostos(
+                          isSelected
+                            ? selectedPostos.filter(id => id !== posto.id)
+                            : [...selectedPostos, posto.id]
+                        )
+                      }}
+                    >
+                      {posto.nome}
+                      {posto.localidade && ` (${posto.localidade})`}
+                    </Button>
+                  )
+                })}
+                {postos.length === 0 && (
+                  <p className="text-sm text-muted-foreground">Nenhum posto cadastrado</p>
+                )}
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-4">

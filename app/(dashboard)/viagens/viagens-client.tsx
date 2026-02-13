@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -33,6 +33,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Tooltip,
   TooltipContent,
@@ -51,6 +52,7 @@ import {
   ArrowRight,
   Calendar,
   DollarSign,
+  Fuel,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -113,6 +115,22 @@ function formatPontosIntermediarios(pontos?: PontoIntermediario[] | null) {
     .join(" • ")
 }
 
+function parseLocaisAbastecimento(rota?: Rota) {
+  if (!rota) return []
+  // Use postos from relationship if available, fallback to old locais_abastecimento field
+  if (rota.postos && rota.postos.length > 0) {
+    return rota.postos.map(p => p.nome + (p.localidade ? ` (${p.localidade})` : ''))
+  }
+  // Fallback for backward compatibility
+  if (rota.locais_abastecimento) {
+    return rota.locais_abastecimento
+      .split(/\n|,/) 
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
 export function ViagensClient({ 
   initialViagens, 
   clientes: initialClientes, 
@@ -125,6 +143,136 @@ export function ViagensClient({
   const [veiculos, setVeiculos] = useState(initialVeiculos)
   const [motoristas, setMotoristas] = useState(initialMotoristas)
   const [rotas, setRotas] = useState(initialRotas)
+
+  const supabase = createClient()
+
+  // State to track which postos have been abastecidos for each viagem
+  const [abastecimentosRegistrados, setAbastecimentosRegistrados] = useState<Record<string, string[]>>({}) // viagemId -> [posto1, posto2, ...]
+
+  // Load abastecimentos on mount
+  useEffect(() => {
+    const loadAbastecimentos = async () => {
+      const viagemIds = viagens.map(v => v.id)
+      if (viagemIds.length === 0) return
+
+      const { data } = await supabase
+        .from("abastecimentos")
+        .select("viagem_id, posto")
+        .in("viagem_id", viagemIds)
+        .not("posto", "is", null)
+
+      if (data) {
+        const map: Record<string, string[]> = {}
+        data.forEach((abast: any) => {
+          if (!map[abast.viagem_id]) {
+            map[abast.viagem_id] = []
+          }
+          if (abast.posto && !map[abast.viagem_id].includes(abast.posto)) {
+            map[abast.viagem_id].push(abast.posto)
+          }
+        })
+        setAbastecimentosRegistrados(map)
+      }
+    }
+    loadAbastecimentos()
+  }, [viagens])
+
+  // Helper function to fetch viagem with postos
+  const fetchViagemWithPostos = async (viagemId: string) => {
+    const { data: viagem } = await supabase
+      .from("viagens")
+      .select("*, cliente:clientes(*), veiculo:veiculos(*), motorista:motoristas(*), rota:rotas(*)")
+      .eq("id", viagemId)
+      .single()
+
+    if (viagem && viagem.rota_id) {
+      const { data: rotaPostos } = await supabase
+        .from("rota_postos")
+        .select("posto:postos_abastecimento(*), ordem")
+        .eq("rota_id", viagem.rota_id)
+        .order("ordem")
+
+      if (rotaPostos && viagem.rota) {
+        viagem.rota.postos = rotaPostos.map((rp: any) => rp.posto)
+      }
+    }
+
+    return viagem
+  }
+
+  const [abastecimentoStatus, setAbastecimentoStatus] = useState<Record<string, "sim" | "nao">>({})
+  const [abastecimentoDialogOpen, setAbastecimentoDialogOpen] = useState(false)
+  const [selectedViagemAbastecimento, setSelectedViagemAbastecimento] = useState<Viagem | null>(null)
+  const [abastecimentoForm, setAbastecimentoForm] = useState({ hodometro: "", litros: "", valor_total: "", posto: "", observacao: "" })
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const stored = window.localStorage.getItem("tms-abastecimento-status")
+    if (stored) {
+      setAbastecimentoStatus(JSON.parse(stored))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem("tms-abastecimento-status", JSON.stringify(abastecimentoStatus))
+  }, [abastecimentoStatus])
+
+  const handleAbastecimentoClick = (viagem: Viagem, ponto?: string) => {
+    setSelectedViagemAbastecimento(viagem)
+    setAbastecimentoForm({ hodometro: viagem.km_real?.toString() || "", litros: "", valor_total: "", posto: ponto || "", observacao: "" })
+    setAbastecimentoDialogOpen(true)
+  }
+
+  const handleAbastecimentoSubmit = async () => {
+    if (!selectedViagemAbastecimento || !selectedViagemAbastecimento.veiculo_id) return
+    if (!abastecimentoForm.hodometro || !abastecimentoForm.litros || !abastecimentoForm.valor_total || !abastecimentoForm.posto) {
+      alert("Preencha todos os campos obrigatórios")
+      return
+    }
+
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (!user) return
+
+    const { error } = await supabase.from("abastecimentos").insert([
+      {
+        user_id: user.id,
+        veiculo_id: selectedViagemAbastecimento.veiculo_id,
+        viagem_id: selectedViagemAbastecimento.id,
+        data: new Date().toISOString().split("T")[0],
+        hodometro: parseInt(abastecimentoForm.hodometro),
+        litros: parseFloat(abastecimentoForm.litros),
+        valor_total: parseFloat(abastecimentoForm.valor_total),
+        posto: abastecimentoForm.posto,
+        observacao: abastecimentoForm.observacao || null,
+      },
+    ])
+
+    if (error) {
+      console.error("Erro ao registrar abastecimento:", error)
+      alert("Erro ao registrar abastecimento: " + error.message)
+      return
+    }
+
+    // Update the local state to show the posto as abastecido
+    setAbastecimentosRegistrados((prev) => ({
+      ...prev,
+      [selectedViagemAbastecimento.id]: [
+        ...(prev[selectedViagemAbastecimento.id] || []),
+        abastecimentoForm.posto
+      ]
+    }))
+
+    setAbastecimentoStatus((prev) => ({
+      ...prev,
+      [selectedViagemAbastecimento.id]: "sim",
+    }))
+    setAbastecimentoDialogOpen(false)
+    setSelectedViagemAbastecimento(null)
+    setAbastecimentoForm({ hodometro: "", litros: "", valor_total: "", posto: "", observacao: "" })
+  }
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
@@ -208,7 +356,6 @@ export function ViagensClient({
   }
 
   const handleStatusChange = async (viagem: Viagem, newStatus: string) => {
-    const supabase = createClient()
     const updates: Record<string, unknown> = { status: newStatus }
     
     if (newStatus === "Em andamento" && !viagem.data_inicio) {
@@ -218,22 +365,22 @@ export function ViagensClient({
       updates.data_fim = new Date().toISOString()
     }
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("viagens")
       .update(updates)
       .eq("id", viagem.id)
-      .select("*, cliente:clientes(*), veiculo:veiculos(*), motorista:motoristas(*), rota:rotas(*)")
-      .single()
 
-    if (!error && data) {
-      setViagens(viagens.map(v => v.id === viagem.id ? data : v))
+    if (!error) {
+      const updatedViagem = await fetchViagemWithPostos(viagem.id)
+      if (updatedViagem) {
+        setViagens(viagens.map(v => v.id === viagem.id ? updatedViagem : v))
+      }
     }
   }
 
   const confirmDelete = async () => {
     if (!selectedViagem) return
     
-    const supabase = createClient()
     const { error } = await supabase
       .from("viagens")
       .delete()
@@ -250,7 +397,6 @@ export function ViagensClient({
     e.preventDefault()
     setIsLoading(true)
 
-    const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
     if (!user) {
@@ -278,25 +424,29 @@ export function ViagensClient({
     }
 
     if (selectedViagem) {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("viagens")
         .update(viagemData)
         .eq("id", selectedViagem.id)
-        .select("*, cliente:clientes(*), veiculo:veiculos(*), motorista:motoristas(*), rota:rotas(*)")
-        .single()
 
-      if (!error && data) {
-        setViagens(viagens.map(v => v.id === selectedViagem.id ? data : v))
+      if (!error) {
+        const updatedViagem = await fetchViagemWithPostos(selectedViagem.id)
+        if (updatedViagem) {
+          setViagens(viagens.map(v => v.id === selectedViagem.id ? updatedViagem : v))
+        }
       }
     } else {
       const { data, error } = await supabase
         .from("viagens")
         .insert(viagemData)
-        .select("*, cliente:clientes(*), veiculo:veiculos(*), motorista:motoristas(*), rota:rotas(*)")
+        .select("id")
         .single()
 
       if (!error && data) {
-        setViagens([data, ...viagens])
+        const newViagem = await fetchViagemWithPostos(data.id)
+        if (newViagem) {
+          setViagens([newViagem, ...viagens])
+        }
       }
     }
 
@@ -457,6 +607,77 @@ export function ViagensClient({
                             <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                               <span className="font-medium text-foreground/80">Pontos intermediarios:</span>
                               <span>{formatPontosIntermediarios(viagem.rota?.pontos_intermediarios)}</span>
+                            </div>
+                          )}
+                          {parseLocaisAbastecimento(viagem.rota).length > 0 && (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <Fuel className="h-3 w-3 text-primary" />
+                                <span className="font-medium text-foreground/80">Pontos de abastecimento:</span>
+                              </div>
+                              <div className="flex flex-col gap-1 ml-5">
+                                {parseLocaisAbastecimento(viagem.rota).map((ponto) => {
+                                  const foiAbastecido = abastecimentosRegistrados[viagem.id]?.includes(ponto)
+                                  return (
+                                    <div key={ponto} className="flex items-center gap-2">
+                                      <Badge className={foiAbastecido ? "bg-success/20 text-success border-success" : "bg-muted/60 text-foreground/80"}>
+                                        {ponto}
+                                      </Badge>
+                                      {viagem.status === "Em andamento" && (
+                                        foiAbastecido ? (
+                                          <Badge variant="outline" className="h-6 px-3 text-xs bg-success/10 text-success border-success">
+                                            <CheckCircle className="w-3 h-3 mr-1" />
+                                            Abastecido
+                                          </Badge>
+                                        ) : (
+                                          <Button
+                                            size="sm"
+                                            variant="default"
+                                            className="h-6 px-3 text-xs font-medium"
+                                            onClick={() => handleAbastecimentoClick(viagem, ponto)}
+                                          >
+                                            <Fuel className="w-3 h-3 mr-1" />
+                                            Registrar
+                                          </Button>
+                                        )
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {(viagem.status === "Em andamento" || abastecimentoStatus[viagem.id]) && parseLocaisAbastecimento(viagem.rota).length === 0 && (
+                            <div className="flex items-center gap-2 text-xs flex-wrap">
+                              <span className="text-muted-foreground">Abasteceu na estacao?</span>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={abastecimentoStatus[viagem.id] === "sim" ? "default" : "outline"}
+                                className="h-7 px-2"
+                                onClick={() => handleAbastecimentoClick(viagem)}
+                              >
+                                Sim
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={abastecimentoStatus[viagem.id] === "nao" ? "default" : "outline"}
+                                className="h-7 px-2"
+                                onClick={() =>
+                                  setAbastecimentoStatus((prev) => ({
+                                    ...prev,
+                                    [viagem.id]: "nao",
+                                  }))
+                                }
+                              >
+                                Nao
+                              </Button>
+                              {abastecimentoStatus[viagem.id] && (
+                                <Badge className={abastecimentoStatus[viagem.id] === "sim" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}>
+                                  {abastecimentoStatus[viagem.id] === "sim" ? "Abasteceu" : "Nao abasteceu"}
+                                </Badge>
+                              )}
                             </div>
                           )}
                           <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
@@ -824,6 +1045,82 @@ export function ViagensClient({
           }))
         }}
       />
+
+      {/* Abastecimento Modal */}
+      <Dialog open={abastecimentoDialogOpen} onOpenChange={setAbastecimentoDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Registrar Abastecimento</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="abast-hodometro">Hodômetro (km) *</Label>
+              <Input
+                id="abast-hodometro"
+                type="number"
+                placeholder="Ex: 45000"
+                value={abastecimentoForm.hodometro}
+                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, hodometro: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="abast-litros">Litros *</Label>
+              <Input
+                id="abast-litros"
+                type="number"
+                step="0.01"
+                placeholder="Ex: 50.5"
+                value={abastecimentoForm.litros}
+                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, litros: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="abast-valor">Valor Total (R$) *</Label>
+              <Input
+                id="abast-valor"
+                type="number"
+                step="0.01"
+                placeholder="Ex: 250.50"
+                value={abastecimentoForm.valor_total}
+                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, valor_total: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="abast-posto">Posto *</Label>
+              <Select value={abastecimentoForm.posto} onValueChange={(value) => setAbastecimentoForm({ ...abastecimentoForm, posto: value })}>
+                <SelectTrigger id="abast-posto">
+                  <SelectValue placeholder="Selecione um ponto..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedViagemAbastecimento && parseLocaisAbastecimento(selectedViagemAbastecimento.rota).map((ponto) => (
+                    <SelectItem key={ponto} value={ponto}>
+                      {ponto}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="abast-obs">Observação</Label>
+              <Textarea
+                id="abast-obs"
+                placeholder="Observações adicionais"
+                value={abastecimentoForm.observacao}
+                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, observacao: e.target.value })}
+                rows={2}
+              />
+            </div>
+            <div className="flex gap-2 justify-end pt-2">
+              <Button variant="outline" onClick={() => setAbastecimentoDialogOpen(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={handleAbastecimentoSubmit}>
+                Registrar
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
