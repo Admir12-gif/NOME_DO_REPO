@@ -7,7 +7,6 @@ import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import {
   LayoutDashboard,
-  BarChart3,
   Truck,
   Route,
   Users,
@@ -38,11 +37,6 @@ const navItems: NavItem[] = [
     title: "Painel",
     href: "/dashboard",
     icon: <LayoutDashboard className="h-5 w-5" />,
-  },
-  {
-    title: "Painel Analitico",
-    href: "/dashboard/analitico",
-    icon: <BarChart3 className="h-5 w-5" />,
   },
   {
     title: "Viagens",
