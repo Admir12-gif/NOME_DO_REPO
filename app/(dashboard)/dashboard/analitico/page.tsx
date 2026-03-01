@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
 import { AdvancedDashboardCharts } from "@/components/advanced-dashboard-charts"
+import { Card, CardContent } from "@/components/ui/card"
 
 function monthKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
@@ -9,6 +10,29 @@ function formatMonthLabel(date: Date) {
   return date
     .toLocaleDateString("pt-BR", { month: "short", year: "2-digit" })
     .replace(".", "")
+}
+
+function normalizeViagemStatus(status?: string | null) {
+  if (!status) return "Planejada"
+  if (status === "Concluída") return "Concluida"
+  return status
+}
+
+function normalizeCategoria(categoria?: string | null) {
+  if (!categoria) return "Outros"
+
+  const normalized = categoria
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim()
+
+  if (normalized === "diesel") return "Diesel"
+  if (normalized === "pedagio") return "Pedagio"
+  if (normalized === "diarias") return "Diarias"
+  if (normalized === "comissao" || normalized === "comissao motorista") return "Comissao"
+  if (normalized === "arla") return "Arla"
+  return "Outros"
 }
 
 export default async function DashboardAnaliticoPage() {
@@ -21,7 +45,7 @@ export default async function DashboardAnaliticoPage() {
   const [viagensRes, custosRes] = await Promise.all([
     supabase
       .from("viagens")
-      .select("id, data_inicio, valor_frete, km_real, volume_toneladas, status, cliente:clientes(nome), rota:rotas(nome)")
+      .select("id, data_inicio, data_fim, valor_frete, km_real, volume_toneladas, status, eta_destino_em, atraso_estimado_minutos, cliente:clientes(nome), rota:rotas(nome)")
       .gte("data_inicio", rangeStart.toISOString())
       .lte("data_inicio", rangeEnd.toISOString()),
     supabase
@@ -103,7 +127,7 @@ export default async function DashboardAnaliticoPage() {
   }))
 
   const custosPorCategoria = custos.reduce((acc, c) => {
-    const categoria = c.categoria || "Outros"
+    const categoria = normalizeCategoria(c.categoria)
     acc[categoria] = (acc[categoria] || 0) + (c.valor || 0)
     return acc
   }, {} as Record<string, number>)
@@ -115,7 +139,7 @@ export default async function DashboardAnaliticoPage() {
 
   const statusSeries = Object.entries(
     viagens.reduce((acc, v) => {
-      const status = v.status || "Planejada"
+      const status = normalizeViagemStatus(v.status)
       acc[status] = (acc[status] || 0) + 1
       return acc
     }, {} as Record<string, number>),
@@ -124,6 +148,16 @@ export default async function DashboardAnaliticoPage() {
   const faturamentoTotal = viagens.reduce((sum, v) => sum + (v.valor_frete || 0), 0)
   const custosTotal = custos.reduce((sum, c) => sum + (c.valor || 0), 0)
   const lucro = faturamentoTotal - custosTotal
+
+  const viagensEmAndamento = viagens.filter((v) => normalizeViagemStatus(v.status) === "Em andamento")
+  const comAtraso = viagensEmAndamento.filter((v) => (v.atraso_estimado_minutos || 0) > 0)
+  const atrasoMedioMin = comAtraso.length > 0
+    ? Math.round(comAtraso.reduce((sum, v) => sum + (v.atraso_estimado_minutos || 0), 0) / comAtraso.length)
+    : 0
+  const proximosEta = viagensEmAndamento
+    .filter((v) => v.eta_destino_em)
+    .sort((a, b) => new Date(a.eta_destino_em || 0).getTime() - new Date(b.eta_destino_em || 0).getTime())
+    .slice(0, 1)[0]
 
   const waterfallSeries = [
     { etapa: "Faturamento", base: 0, valor: faturamentoTotal },
@@ -136,7 +170,7 @@ export default async function DashboardAnaliticoPage() {
   const stackedCategories = Array.from(
     new Set([
       ...categoryOrder,
-      ...custos.map((c) => c.categoria || "Outros"),
+      ...custos.map((c) => normalizeCategoria(c.categoria)),
     ]),
   )
 
@@ -144,14 +178,14 @@ export default async function DashboardAnaliticoPage() {
     if (!c.data) return acc
     const key = monthKey(new Date(c.data))
     if (!acc[key]) acc[key] = {}
-    const categoria = c.categoria || "Outros"
+    const categoria = normalizeCategoria(c.categoria)
     acc[key][categoria] = (acc[key][categoria] || 0) + (c.valor || 0)
     return acc
   }, {} as Record<string, Record<string, number>>)
 
   const stackedSeries = stackedMonths.map((month) => {
     const monthData = custosPorMesECategoria[month.key] || {}
-    const base: Record<string, number | string> = { month: month.label }
+    const base: { month: string; [key: string]: number | string } = { month: month.label }
     stackedCategories.forEach((categoria) => {
       base[categoria] = monthData[categoria] || 0
     })
@@ -160,7 +194,8 @@ export default async function DashboardAnaliticoPage() {
 
   const topClients = Object.entries(
     viagens.reduce((acc, v) => {
-      const nome = v.cliente?.nome || "Sem cliente"
+      const cliente = Array.isArray(v.cliente) ? v.cliente[0] : v.cliente
+      const nome = cliente?.nome || "Sem cliente"
       acc[nome] = (acc[nome] || 0) + (v.valor_frete || 0)
       return acc
     }, {} as Record<string, number>),
@@ -171,7 +206,8 @@ export default async function DashboardAnaliticoPage() {
 
   const topRoutes = Object.entries(
     viagens.reduce((acc, v) => {
-      const nome = v.rota?.nome || "Rota avulsa"
+      const rota = Array.isArray(v.rota) ? v.rota[0] : v.rota
+      const nome = rota?.nome || "Rota avulsa"
       acc[nome] = (acc[nome] || 0) + (v.valor_frete || 0)
       return acc
     }, {} as Record<string, number>),
@@ -187,6 +223,38 @@ export default async function DashboardAnaliticoPage() {
         <p className="text-muted-foreground">
           Analise visual dos ultimos 6 meses
         </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="border-border/50">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">Viagens em andamento</p>
+            <p className="text-2xl font-semibold">{viagensEmAndamento.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border/50">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">ETA mais próximo</p>
+            <p className="text-lg font-semibold">
+              {proximosEta?.eta_destino_em
+                ? new Date(proximosEta.eta_destino_em).toLocaleString("pt-BR", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "-"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-border/50">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">Atraso médio estimado</p>
+            <p className={atrasoMedioMin > 0 ? "text-2xl font-semibold text-destructive" : "text-2xl font-semibold"}>
+              {atrasoMedioMin > 0 ? `+${atrasoMedioMin} min` : "No prazo"}
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       <AdvancedDashboardCharts

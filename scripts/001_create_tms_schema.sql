@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS viagens (
   rota_avulsa BOOLEAN DEFAULT FALSE,
   origem_real TEXT,
   destino_real TEXT,
+  planejamento_rota JSONB,
   km_real DECIMAL(12,2),
   
   -- Financial
@@ -164,7 +165,7 @@ CREATE TABLE IF NOT EXISTS abastecimentos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   veiculo_id UUID NOT NULL REFERENCES veiculos(id) ON DELETE CASCADE,
-  data DATE NOT NULL,
+  data TIMESTAMPTZ NOT NULL,
   hodometro DECIMAL(12,2) NOT NULL, -- km at time of fueling
   litros DECIMAL(10,2) NOT NULL,
   valor_total DECIMAL(12,2) NOT NULL,

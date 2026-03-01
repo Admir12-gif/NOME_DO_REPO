@@ -33,11 +33,30 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DataTable } from "@/components/data-table"
 import { Plus, Fuel, TrendingDown, Calculator } from "lucide-react"
-import type { Abastecimento, Veiculo } from "@/lib/types"
+import type { Abastecimento, Veiculo, PostoAbastecimento } from "@/lib/types"
+
+function toDatetimeLocal(value?: string | null) {
+  if (!value) return ""
+  const date = new Date(value)
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
+  return date.toISOString().slice(0, 16)
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "-"
+  return new Date(value).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
 
 export function AbastecimentosClient() {
   const [abastecimentos, setAbastecimentos] = useState<Abastecimento[]>([])
   const [veiculos, setVeiculos] = useState<Veiculo[]>([])
+  const [postos, setPostos] = useState<PostoAbastecimento[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -48,7 +67,8 @@ export function AbastecimentosClient() {
 
   const [formData, setFormData] = useState({
     veiculo_id: "",
-    data: "",
+    posto_id: "",
+    data: toDatetimeLocal(new Date().toISOString()),
     hodometro: "",
     litros: "",
     valor_total: "",
@@ -59,12 +79,13 @@ export function AbastecimentosClient() {
   useEffect(() => {
     fetchAbastecimentos()
     fetchVeiculos()
+    fetchPostos()
   }, [])
 
   async function fetchAbastecimentos() {
     const { data, error } = await supabase
       .from("abastecimentos")
-      .select("*, veiculo:veiculos(placa_cavalo, modelo)")
+      .select("*, veiculo:veiculos(placa_cavalo, modelo), posto_cadastrado:postos_abastecimento(id, nome, localidade, referencia)")
       .order("data", { ascending: false })
 
     if (!error && data) {
@@ -76,6 +97,15 @@ export function AbastecimentosClient() {
   async function fetchVeiculos() {
     const { data } = await supabase.from("veiculos").select("id, placa_cavalo, modelo").order("placa_cavalo")
     if (data) setVeiculos(data as Veiculo[])
+  }
+
+  async function fetchPostos() {
+    const { data } = await supabase
+      .from("postos_abastecimento")
+      .select("id, user_id, nome, localidade, referencia, created_at, updated_at")
+      .order("nome")
+
+    if (data) setPostos(data as PostoAbastecimento[])
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -90,11 +120,12 @@ export function AbastecimentosClient() {
     const abastecimentoData = {
       user_id: userData.user.id,
       veiculo_id: formData.veiculo_id,
-      data: formData.data,
+      posto_id: formData.posto_id || null,
+      data: formData.data ? new Date(formData.data).toISOString() : null,
       hodometro: Number.parseFloat(formData.hodometro),
       litros: Number.parseFloat(formData.litros),
       valor_total: Number.parseFloat(formData.valor_total),
-      posto: formData.posto || null,
+      posto: formData.posto || postos.find((posto) => posto.id === formData.posto_id)?.nome || null,
       observacao: formData.observacao || null,
     }
 
@@ -121,7 +152,8 @@ export function AbastecimentosClient() {
   function resetForm() {
     setFormData({
       veiculo_id: "",
-      data: "",
+      posto_id: "",
+      data: toDatetimeLocal(new Date().toISOString()),
       hodometro: "",
       litros: "",
       valor_total: "",
@@ -135,7 +167,8 @@ export function AbastecimentosClient() {
     setEditingAbastecimento(abastecimento)
     setFormData({
       veiculo_id: abastecimento.veiculo_id,
-      data: abastecimento.data,
+      posto_id: abastecimento.posto_id || abastecimento.posto_cadastrado?.id || "",
+      data: toDatetimeLocal(abastecimento.data),
       hodometro: abastecimento.hodometro.toString(),
       litros: abastecimento.litros.toString(),
       valor_total: abastecimento.valor_total.toString(),
@@ -158,7 +191,7 @@ export function AbastecimentosClient() {
     {
       key: "data" as const,
       label: "Data",
-      render: (a: Abastecimento) => new Date(a.data + "T12:00:00").toLocaleDateString("pt-BR"),
+      render: (a: Abastecimento) => formatDateTime(a.data),
     },
     {
       key: "veiculo_id" as const,
@@ -187,7 +220,7 @@ export function AbastecimentosClient() {
     {
       key: "posto" as const,
       label: "Posto",
-      render: (a: Abastecimento) => a.posto || "-",
+      render: (a: Abastecimento) => a.posto_cadastrado?.nome || a.posto || "-",
     },
   ]
 
@@ -277,10 +310,10 @@ export function AbastecimentosClient() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="data">Data *</Label>
+                <Label htmlFor="data">Data e hora *</Label>
                 <Input
                   id="data"
-                  type="date"
+                  type="datetime-local"
                   required
                   value={formData.data}
                   onChange={(e) => setFormData({ ...formData, data: e.target.value })}
@@ -320,11 +353,34 @@ export function AbastecimentosClient() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="posto">Posto</Label>
+                <Label htmlFor="posto_id">Posto cadastrado</Label>
+                <Select
+                  value={formData.posto_id || undefined}
+                  onValueChange={(v) => setFormData({
+                    ...formData,
+                    posto_id: v,
+                    posto: postos.find((posto) => posto.id === v)?.nome || formData.posto,
+                  })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={postos.length > 0 ? "Selecione um posto" : "Nenhum posto cadastrado"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {postos.map((posto) => (
+                      <SelectItem key={posto.id} value={posto.id}>
+                        {posto.nome}{posto.localidade ? ` • ${posto.localidade}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="posto">Posto (livre)</Label>
                 <Input
                   id="posto"
                   value={formData.posto}
                   onChange={(e) => setFormData({ ...formData, posto: e.target.value })}
+                  placeholder="Use se o posto não estiver cadastrado"
                 />
               </div>
               <div className="space-y-2 md:col-span-2">

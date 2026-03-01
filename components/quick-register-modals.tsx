@@ -19,7 +19,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { Cliente, Veiculo, Motorista, Rota, PontoIntermediario } from "@/lib/types"
+import {
+  type Cliente,
+  type Veiculo,
+  type Motorista,
+  type Rota,
+  type PontoIntermediario,
+  PONTO_PARADA_TIPO_OPTIONS,
+  normalizePontoParadaTipo,
+} from "@/lib/types"
 import { Users, Truck, User, Route, Plus, X, GripVertical } from "lucide-react"
 
 const ESTADOS = [
@@ -330,7 +338,10 @@ export function QuickRotaModal({
   }
 
   const addPonto = () => {
-    setPontosIntermediarios([...pontosIntermediarios, { cidade: "", estado: "", observacao: "" }])
+    setPontosIntermediarios([
+      ...pontosIntermediarios,
+      { cidade: "", estado: "", tipo_parada: "parada", observacao: "" },
+    ])
   }
 
   const removePonto = (index: number) => {
@@ -350,7 +361,12 @@ export function QuickRotaModal({
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setIsLoading(false); return }
 
-    const validPontos = pontosIntermediarios.filter(p => p.cidade.trim() !== "")
+    const validPontos = pontosIntermediarios
+      .filter(p => p.cidade.trim() !== "")
+      .map((ponto) => ({
+        ...ponto,
+        tipo_parada: normalizePontoParadaTipo(ponto.tipo_parada),
+      }))
 
     const { data, error } = await supabase
       .from("rotas")
@@ -430,8 +446,8 @@ export function QuickRotaModal({
                       <X className="h-4 w-4" />
                     </Button>
                   </div>
-                  <div className="grid grid-cols-5 gap-2">
-                    <div className="col-span-2 grid gap-1">
+                  <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
+                    <div className="md:col-span-2 grid gap-1">
                       <Label className="text-xs">Cidade</Label>
                       <Input value={ponto.cidade} onChange={(e) => updatePonto(index, "cidade", e.target.value)} placeholder="Cidade" />
                     </div>
@@ -442,7 +458,18 @@ export function QuickRotaModal({
                         <SelectContent>{ESTADOS.map((uf) => (<SelectItem key={uf} value={uf}>{uf}</SelectItem>))}</SelectContent>
                       </Select>
                     </div>
-                    <div className="col-span-2 grid gap-1">
+                    <div className="md:col-span-2 grid gap-1">
+                      <Label className="text-xs">Tipo</Label>
+                      <Select value={normalizePontoParadaTipo(ponto.tipo_parada)} onValueChange={(v) => updatePonto(index, "tipo_parada", normalizePontoParadaTipo(v))}>
+                        <SelectTrigger><SelectValue placeholder="Tipo" /></SelectTrigger>
+                        <SelectContent>
+                          {PONTO_PARADA_TIPO_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-1">
                       <Label className="text-xs">Obs.</Label>
                       <Input value={ponto.observacao || ""} onChange={(e) => updatePonto(index, "observacao", e.target.value)} placeholder="Parada, descarga..." />
                     </div>

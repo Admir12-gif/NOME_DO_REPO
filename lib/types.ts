@@ -48,11 +48,88 @@ export interface PostoAbastecimento {
   updated_at: string
 }
 
+export type PontoParadaTipo = "parada" | "descanso" | "abastecimento" | "descarga" | "ocorrencia"
+
+export const PONTO_PARADA_TIPO_OPTIONS: ReadonlyArray<{ value: PontoParadaTipo; label: string }> = [
+  { value: "parada", label: "Parada padrão" },
+  { value: "descanso", label: "Descanso" },
+  { value: "abastecimento", label: "Abastecimento" },
+  { value: "descarga", label: "Descarga" },
+  { value: "ocorrencia", label: "Ocorrência" },
+]
+
+export function normalizePontoParadaTipo(tipo?: string | null): PontoParadaTipo {
+  if (!tipo) return "parada"
+
+  const normalized = tipo
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim()
+
+  if (normalized === "descanso") return "descanso"
+  if (normalized === "abastecimento") return "abastecimento"
+  if (normalized === "descarga") return "descarga"
+  if (normalized === "ocorrencia") return "ocorrencia"
+  if (normalized === "parada" || normalized === "parada padrao" || normalized === "parada_padrao") {
+    return "parada"
+  }
+
+  return "parada"
+}
+
+export function getPontoParadaTipoLabel(tipo?: string | null) {
+  const normalizedTipo = normalizePontoParadaTipo(tipo)
+  return PONTO_PARADA_TIPO_OPTIONS.find((option) => option.value === normalizedTipo)?.label || "Parada padrão"
+}
+
 export interface PontoIntermediario {
   cidade: string
   estado: string
+  tipo_parada?: PontoParadaTipo
   observacao?: string
 }
+
+export interface ViagemPlanejamentoIntermediario {
+  chave: string
+  cidade: string
+  estado: string
+  tipo_parada?: PontoParadaTipo
+  chegada_planejada: string | null
+  partida_planejada: string | null
+}
+
+export interface ViagemPlanejamentoRota {
+  origem_partida_planejada: string | null
+  destino_chegada_planejada: string | null
+  intermediarios: ViagemPlanejamentoIntermediario[]
+}
+
+export type ViagemStatus = 'Planejada' | 'Em andamento' | 'Concluida' | 'Concluída' | 'Cancelada'
+
+export type EventoViagemTipo =
+  | 'chegada'
+  | 'saida'
+  | 'abastecimento'
+  | 'ocorrencia'
+  | 'pedagio'
+  | 'parada'
+  | 'espera'
+
+export type EventoViagemStatus = 'concluido' | 'em_andamento' | 'pendente' | 'atrasado'
+
+export type DocumentoViagemTipo =
+  | 'NF'
+  | 'CTE'
+  | 'MDFE'
+  | 'CANHOTO'
+  | 'COMPROVANTE_ABASTECIMENTO'
+  | 'PEDAGIO'
+  | 'OCORRENCIA'
+  | 'FOTO'
+  | 'OUTRO'
+
+export type EtaEscopo = 'global' | 'rota' | 'motorista' | 'veiculo'
 
 export interface Rota {
   id: string
@@ -89,13 +166,21 @@ export interface Viagem {
   destino_real: string | null
   km_real: number | null
   valor_frete: number | null
-  status: 'Planejada' | 'Em andamento' | 'Concluida' | 'Cancelada'
+  planejamento_rota?: ViagemPlanejamentoRota | null
+  status: ViagemStatus
   chegada_carregar: string | null
   inicio_carregamento: string | null
   fim_carregamento: string | null
   chegada_descarregar: string | null
   inicio_descarga: string | null
   fim_descarga: string | null
+  eta_destino_em: string | null
+  eta_proximo_ponto_em: string | null
+  eta_calculado_em: string | null
+  atraso_estimado_minutos: number | null
+  velocidade_media_kmh: number | null
+  km_restante: number | null
+  carregado: boolean
   created_at: string
   updated_at: string
   // Joined fields
@@ -114,6 +199,18 @@ export interface CustoViagem {
   valor: number
   observacao: string | null
   created_at: string
+}
+
+export interface ReceitaViagem {
+  id: string
+  user_id: string
+  viagem_id: string
+  data: string
+  tipo: 'Frete principal' | 'Receita extra' | 'Ajuste' | 'Desconto'
+  descricao: string | null
+  valor: number
+  created_at: string
+  updated_at: string
 }
 
 export interface ContaReceber {
@@ -156,6 +253,7 @@ export interface Abastecimento {
   id: string
   user_id: string
   veiculo_id: string
+  posto_id?: string | null
   viagem_id?: string | null
   data: string
   hodometro: number
@@ -166,6 +264,55 @@ export interface Abastecimento {
   created_at: string
   // Joined fields
   veiculo?: Veiculo
+  posto_cadastrado?: PostoAbastecimento | null
+}
+
+export interface ViagemEvento {
+  id: string
+  user_id: string
+  viagem_id: string
+  tipo_evento: EventoViagemTipo
+  status_evento: EventoViagemStatus
+  titulo: string
+  observacao: string | null
+  local: string | null
+  previsto_em: string | null
+  ocorrido_em: string
+  impacto_minutos: number
+  comprovante_url: string | null
+  payload: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ViagemDocumento {
+  id: string
+  user_id: string
+  viagem_id: string
+  tipo_documento: DocumentoViagemTipo
+  nome_arquivo: string
+  arquivo_url: string
+  observacao: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EtaParametro {
+  id: string
+  user_id: string
+  escopo: EtaEscopo
+  entidade_id: string | null
+  velocidade_media_carregado: number
+  velocidade_media_vazio: number
+  parada_abastecimento_min: number
+  parada_pedagio_min: number
+  parada_descarga_min: number
+  parada_coleta_min: number
+  parada_espera_min: number
+  ativo: boolean
+  created_at: string
+  updated_at: string
 }
 
 export interface Manutencao {

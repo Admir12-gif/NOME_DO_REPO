@@ -4,6 +4,7 @@ import React from "react"
 
 import { useEffect, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
+import { ViagemDetalheClient } from "./[viagemId]/viagemDetalheClient"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -33,14 +34,22 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import type { Viagem, Cliente, Veiculo, Motorista, Rota, PontoIntermediario } from "@/lib/types"
+import type {
+  Viagem,
+  Cliente,
+  Veiculo,
+  Motorista,
+  Rota,
+  PontoIntermediario,
+  ViagemEvento,
+  CustoViagem,
+  ReceitaViagem,
+  ViagemDocumento,
+  EtaParametro,
+  ViagemPlanejamentoRota,
+  ViagemPlanejamentoIntermediario,
+} from "@/lib/types"
+import { getPontoParadaTipoLabel } from "@/lib/types"
 import { 
   Route, 
   Plus, 
@@ -52,7 +61,6 @@ import {
   ArrowRight,
   Calendar,
   DollarSign,
-  Fuel,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -82,6 +90,24 @@ interface ViagensClientProps {
   rotas: Rota[]
 }
 
+interface ViagemFormData {
+  cliente_id: string
+  veiculo_id: string
+  motorista_id: string
+  rota_id: string
+  rota_avulsa: boolean
+  origem_real: string
+  destino_real: string
+  data_inicio: string
+  data_fim: string
+  tipo_carga: string
+  volume_toneladas: string
+  km_real: string
+  valor_frete: string
+  status: string
+  planejamento_rota: ViagemPlanejamentoRota | null
+}
+
 const STATUS_OPTIONS = [
   { value: "Planejada", label: "Planejada" },
   { value: "Em andamento", label: "Em andamento" },
@@ -94,6 +120,12 @@ const statusColors: Record<string, string> = {
   "Em andamento": "bg-primary/10 text-primary",
   Concluida: "bg-success/10 text-success",
   Cancelada: "bg-destructive/10 text-destructive",
+}
+
+function normalizeViagemStatus(status?: string | null) {
+  if (!status) return "Planejada"
+  if (status === "Concluída") return "Concluida"
+  return status
 }
 
 function formatCurrency(value: number) {
@@ -111,24 +143,83 @@ function formatDate(dateStr: string | null) {
 function formatPontosIntermediarios(pontos?: PontoIntermediario[] | null) {
   if (!pontos || pontos.length === 0) return null
   return pontos
-    .map((ponto) => `${ponto.cidade}/${ponto.estado}`)
+    .map((ponto) => `${ponto.cidade}/${ponto.estado} (${getPontoParadaTipoLabel(ponto.tipo_parada)})`)
     .join(" • ")
 }
 
-function parseLocaisAbastecimento(rota?: Rota) {
-  if (!rota) return []
-  // Use postos from relationship if available, fallback to old locais_abastecimento field
-  if (rota.postos && rota.postos.length > 0) {
-    return rota.postos.map(p => p.nome + (p.localidade ? ` (${p.localidade})` : ''))
+function toDatetimeLocal(value?: string | null) {
+  if (!value) return ""
+  const date = new Date(value)
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
+  return date.toISOString().slice(0, 16)
+}
+
+function toIsoOrNull(value?: string | null) {
+  if (!value) return null
+  return new Date(value).toISOString()
+}
+
+function buildIntermediarioChave(ponto: PontoIntermediario, index: number) {
+  const cidade = (ponto.cidade || "").trim().toLowerCase()
+  const estado = (ponto.estado || "").trim().toLowerCase()
+  return `${index}:${cidade}:${estado}`
+}
+
+function buildPlanejamentoRota(
+  rota: Rota,
+  existing?: ViagemPlanejamentoRota | null,
+): ViagemPlanejamentoRota {
+  const existingIntermediarios = new Map(
+    (existing?.intermediarios || []).map((item) => [item.chave, item]),
+  )
+
+  const intermediarios = (rota.pontos_intermediarios || [])
+    .filter((ponto) => ponto.cidade && ponto.estado)
+    .map((ponto, index): ViagemPlanejamentoIntermediario => {
+      const chave = buildIntermediarioChave(ponto, index)
+      const current = existingIntermediarios.get(chave)
+
+      return {
+        chave,
+        cidade: ponto.cidade,
+        estado: ponto.estado,
+        tipo_parada: ponto.tipo_parada,
+        chegada_planejada: current?.chegada_planejada || null,
+        partida_planejada: current?.partida_planejada || null,
+      }
+    })
+
+  return {
+    origem_partida_planejada: existing?.origem_partida_planejada || null,
+    destino_chegada_planejada: existing?.destino_chegada_planejada || null,
+    intermediarios,
   }
-  // Fallback for backward compatibility
-  if (rota.locais_abastecimento) {
-    return rota.locais_abastecimento
-      .split(/\n|,/) 
-      .map((item) => item.trim())
-      .filter(Boolean)
+}
+
+function toFormPlanejamentoRota(value?: ViagemPlanejamentoRota | null) {
+  if (!value) return null
+  return {
+    origem_partida_planejada: toDatetimeLocal(value.origem_partida_planejada),
+    destino_chegada_planejada: toDatetimeLocal(value.destino_chegada_planejada),
+    intermediarios: (value.intermediarios || []).map((item) => ({
+      ...item,
+      chegada_planejada: toDatetimeLocal(item.chegada_planejada),
+      partida_planejada: toDatetimeLocal(item.partida_planejada),
+    })),
   }
-  return []
+}
+
+function toStoragePlanejamentoRota(value?: ViagemPlanejamentoRota | null) {
+  if (!value) return null
+  return {
+    origem_partida_planejada: toIsoOrNull(value.origem_partida_planejada),
+    destino_chegada_planejada: toIsoOrNull(value.destino_chegada_planejada),
+    intermediarios: (value.intermediarios || []).map((item) => ({
+      ...item,
+      chegada_planejada: toIsoOrNull(item.chegada_planejada),
+      partida_planejada: toIsoOrNull(item.partida_planejada),
+    })),
+  }
 }
 
 export function ViagensClient({ 
@@ -145,37 +236,6 @@ export function ViagensClient({
   const [rotas, setRotas] = useState(initialRotas)
 
   const supabase = createClient()
-
-  // State to track which postos have been abastecidos for each viagem
-  const [abastecimentosRegistrados, setAbastecimentosRegistrados] = useState<Record<string, string[]>>({}) // viagemId -> [posto1, posto2, ...]
-
-  // Load abastecimentos on mount
-  useEffect(() => {
-    const loadAbastecimentos = async () => {
-      const viagemIds = viagens.map(v => v.id)
-      if (viagemIds.length === 0) return
-
-      const { data } = await supabase
-        .from("abastecimentos")
-        .select("viagem_id, posto")
-        .in("viagem_id", viagemIds)
-        .not("posto", "is", null)
-
-      if (data) {
-        const map: Record<string, string[]> = {}
-        data.forEach((abast: any) => {
-          if (!map[abast.viagem_id]) {
-            map[abast.viagem_id] = []
-          }
-          if (abast.posto && !map[abast.viagem_id].includes(abast.posto)) {
-            map[abast.viagem_id].push(abast.posto)
-          }
-        })
-        setAbastecimentosRegistrados(map)
-      }
-    }
-    loadAbastecimentos()
-  }, [viagens])
 
   // Helper function to fetch viagem with postos
   const fetchViagemWithPostos = async (viagemId: string) => {
@@ -200,79 +260,6 @@ export function ViagensClient({
     return viagem
   }
 
-  const [abastecimentoStatus, setAbastecimentoStatus] = useState<Record<string, "sim" | "nao">>({})
-  const [abastecimentoDialogOpen, setAbastecimentoDialogOpen] = useState(false)
-  const [selectedViagemAbastecimento, setSelectedViagemAbastecimento] = useState<Viagem | null>(null)
-  const [abastecimentoForm, setAbastecimentoForm] = useState({ hodometro: "", litros: "", valor_total: "", posto: "", observacao: "" })
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const stored = window.localStorage.getItem("tms-abastecimento-status")
-    if (stored) {
-      setAbastecimentoStatus(JSON.parse(stored))
-    }
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    window.localStorage.setItem("tms-abastecimento-status", JSON.stringify(abastecimentoStatus))
-  }, [abastecimentoStatus])
-
-  const handleAbastecimentoClick = (viagem: Viagem, ponto?: string) => {
-    setSelectedViagemAbastecimento(viagem)
-    setAbastecimentoForm({ hodometro: viagem.km_real?.toString() || "", litros: "", valor_total: "", posto: ponto || "", observacao: "" })
-    setAbastecimentoDialogOpen(true)
-  }
-
-  const handleAbastecimentoSubmit = async () => {
-    if (!selectedViagemAbastecimento || !selectedViagemAbastecimento.veiculo_id) return
-    if (!abastecimentoForm.hodometro || !abastecimentoForm.litros || !abastecimentoForm.valor_total || !abastecimentoForm.posto) {
-      alert("Preencha todos os campos obrigatórios")
-      return
-    }
-
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) return
-
-    const { error } = await supabase.from("abastecimentos").insert([
-      {
-        user_id: user.id,
-        veiculo_id: selectedViagemAbastecimento.veiculo_id,
-        viagem_id: selectedViagemAbastecimento.id,
-        data: new Date().toISOString().split("T")[0],
-        hodometro: parseInt(abastecimentoForm.hodometro),
-        litros: parseFloat(abastecimentoForm.litros),
-        valor_total: parseFloat(abastecimentoForm.valor_total),
-        posto: abastecimentoForm.posto,
-        observacao: abastecimentoForm.observacao || null,
-      },
-    ])
-
-    if (error) {
-      console.error("Erro ao registrar abastecimento:", error)
-      alert("Erro ao registrar abastecimento: " + error.message)
-      return
-    }
-
-    // Update the local state to show the posto as abastecido
-    setAbastecimentosRegistrados((prev) => ({
-      ...prev,
-      [selectedViagemAbastecimento.id]: [
-        ...(prev[selectedViagemAbastecimento.id] || []),
-        abastecimentoForm.posto
-      ]
-    }))
-
-    setAbastecimentoStatus((prev) => ({
-      ...prev,
-      [selectedViagemAbastecimento.id]: "sim",
-    }))
-    setAbastecimentoDialogOpen(false)
-    setSelectedViagemAbastecimento(null)
-    setAbastecimentoForm({ hodometro: "", litros: "", valor_total: "", posto: "", observacao: "" })
-  }
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
@@ -280,6 +267,16 @@ export function ViagensClient({
   const [isLoading, setIsLoading] = useState(false)
   const [search, setSearch] = useState("")
   const [activeTab, setActiveTab] = useState("todas")
+  const [cockpitOpen, setCockpitOpen] = useState(false)
+  const [cockpitLoading, setCockpitLoading] = useState(false)
+  const [cockpitData, setCockpitData] = useState<{
+    viagem: Viagem
+    eventos: ViagemEvento[]
+    custos: CustoViagem[]
+    receitas: ReceitaViagem[]
+    documentos: ViagemDocumento[]
+    parametros: EtaParametro[]
+  } | null>(null)
 
   // Quick register modal states
   const [quickClienteOpen, setQuickClienteOpen] = useState(false)
@@ -287,7 +284,7 @@ export function ViagensClient({
   const [quickMotoristaOpen, setQuickMotoristaOpen] = useState(false)
   const [quickRotaOpen, setQuickRotaOpen] = useState(false)
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<ViagemFormData>({
     cliente_id: "",
     veiculo_id: "",
     motorista_id: "",
@@ -302,6 +299,7 @@ export function ViagensClient({
     km_real: "",
     valor_frete: "",
     status: "Planejada",
+    planejamento_rota: null,
   })
 
   const resetForm = () => {
@@ -320,6 +318,7 @@ export function ViagensClient({
       km_real: "",
       valor_frete: "",
       status: "Planejada",
+      planejamento_rota: null,
     })
     setSelectedViagem(null)
   }
@@ -330,6 +329,9 @@ export function ViagensClient({
   }
 
   const handleEdit = (viagem: Viagem) => {
+    const rotaSelecionada = rotas.find((rota) => rota.id === viagem.rota_id)
+    const planejamentoFromViagem = toFormPlanejamentoRota(viagem.planejamento_rota)
+
     setSelectedViagem(viagem)
     setFormData({
       cliente_id: viagem.cliente_id || "",
@@ -339,13 +341,16 @@ export function ViagensClient({
       rota_avulsa: viagem.rota_avulsa,
       origem_real: viagem.origem_real || "",
       destino_real: viagem.destino_real || "",
-      data_inicio: viagem.data_inicio?.split("T")[0] || "",
-      data_fim: viagem.data_fim?.split("T")[0] || "",
+      data_inicio: toDatetimeLocal(viagem.data_inicio),
+      data_fim: toDatetimeLocal(viagem.data_fim),
       tipo_carga: viagem.tipo_carga || "",
       volume_toneladas: viagem.volume_toneladas?.toString() || "",
       km_real: viagem.km_real?.toString() || "",
       valor_frete: viagem.valor_frete?.toString() || "",
       status: viagem.status,
+      planejamento_rota: rotaSelecionada
+        ? buildPlanejamentoRota(rotaSelecionada, planejamentoFromViagem)
+        : planejamentoFromViagem,
     })
     setIsDialogOpen(true)
   }
@@ -357,7 +362,7 @@ export function ViagensClient({
 
   const handleStatusChange = async (viagem: Viagem, newStatus: string) => {
     const updates: Record<string, unknown> = { status: newStatus }
-    
+
     if (newStatus === "Em andamento" && !viagem.data_inicio) {
       updates.data_inicio = new Date().toISOString()
     }
@@ -380,7 +385,7 @@ export function ViagensClient({
 
   const confirmDelete = async () => {
     if (!selectedViagem) return
-    
+
     const { error } = await supabase
       .from("viagens")
       .delete()
@@ -404,7 +409,7 @@ export function ViagensClient({
       return
     }
 
-    const viagemData = {
+    const viagemDataBase = {
       cliente_id: formData.cliente_id || null,
       veiculo_id: formData.veiculo_id || null,
       motorista_id: formData.motorista_id || null,
@@ -423,11 +428,24 @@ export function ViagensClient({
       updated_at: new Date().toISOString(),
     }
 
+    const viagemData = {
+      ...viagemDataBase,
+      planejamento_rota: toStoragePlanejamentoRota(formData.planejamento_rota),
+    }
+
     if (selectedViagem) {
-      const { error } = await supabase
+      let { error } = await supabase
         .from("viagens")
         .update(viagemData)
         .eq("id", selectedViagem.id)
+
+      if (error?.message?.toLowerCase().includes("planejamento_rota")) {
+        const retry = await supabase
+          .from("viagens")
+          .update(viagemDataBase)
+          .eq("id", selectedViagem.id)
+        error = retry.error
+      }
 
       if (!error) {
         const updatedViagem = await fetchViagemWithPostos(selectedViagem.id)
@@ -436,11 +454,21 @@ export function ViagensClient({
         }
       }
     } else {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from("viagens")
         .insert(viagemData)
         .select("id")
         .single()
+
+      if (error?.message?.toLowerCase().includes("planejamento_rota")) {
+        const retry = await supabase
+          .from("viagens")
+          .insert(viagemDataBase)
+          .select("id")
+          .single()
+        data = retry.data
+        error = retry.error
+      }
 
       if (!error && data) {
         const newViagem = await fetchViagemWithPostos(data.id)
@@ -464,11 +492,88 @@ export function ViagensClient({
         origem_real: `${rota.origem_cidade}/${rota.origem_estado}`,
         destino_real: `${rota.destino_cidade}/${rota.destino_estado}`,
         km_real: rota.km_planejado?.toString() || prev.km_real,
+        planejamento_rota: buildPlanejamentoRota(rota, prev.planejamento_rota),
       }))
     }
   }
 
+  const updatePlanejamentoIntermediario = (
+    index: number,
+    field: "chegada_planejada" | "partida_planejada",
+    value: string,
+  ) => {
+    setFormData((prev) => {
+      if (!prev.planejamento_rota) return prev
+
+      const intermediarios = [...prev.planejamento_rota.intermediarios]
+      const current = intermediarios[index]
+      if (!current) return prev
+
+      intermediarios[index] = {
+        ...current,
+        [field]: value || null,
+      }
+
+      return {
+        ...prev,
+        planejamento_rota: {
+          ...prev.planejamento_rota,
+          intermediarios,
+        },
+      }
+    })
+  }
+
+  const handleOpenCockpitModal = async (viagemId: string) => {
+    setCockpitOpen(true)
+    setCockpitLoading(true)
+
+    const [viagem, eventosRes, custosRes, receitasRes, documentosRes, parametrosRes] = await Promise.all([
+      fetchViagemWithPostos(viagemId),
+      supabase
+        .from("viagem_eventos")
+        .select("*")
+        .eq("viagem_id", viagemId)
+        .order("ocorrido_em", { ascending: false }),
+      supabase
+        .from("custos_viagem")
+        .select("*")
+        .eq("viagem_id", viagemId)
+        .order("data", { ascending: false }),
+      supabase
+        .from("receitas_viagem")
+        .select("*")
+        .eq("viagem_id", viagemId)
+        .order("data", { ascending: false }),
+      supabase
+        .from("viagem_documentos")
+        .select("*")
+        .eq("viagem_id", viagemId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("eta_parametros")
+        .select("*")
+        .eq("ativo", true),
+    ])
+
+    if (viagem) {
+      setCockpitData({
+        viagem,
+        eventos: (eventosRes.data || []) as ViagemEvento[],
+        custos: (custosRes.data || []) as CustoViagem[],
+        receitas: (receitasRes.data || []) as ReceitaViagem[],
+        documentos: (documentosRes.data || []) as ViagemDocumento[],
+        parametros: (parametrosRes.data || []) as EtaParametro[],
+      })
+    } else {
+      setCockpitData(null)
+    }
+
+    setCockpitLoading(false)
+  }
+
   const filteredViagens = viagens.filter(v => {
+    const status = normalizeViagemStatus(v.status)
     const matchesSearch = 
       v.cliente?.nome?.toLowerCase().includes(search.toLowerCase()) ||
       v.motorista?.nome?.toLowerCase().includes(search.toLowerCase()) ||
@@ -477,9 +582,9 @@ export function ViagensClient({
       v.destino_real?.toLowerCase().includes(search.toLowerCase())
     
     if (activeTab === "todas") return matchesSearch
-    if (activeTab === "planejadas") return matchesSearch && v.status === "Planejada"
-    if (activeTab === "em_andamento") return matchesSearch && v.status === "Em andamento"
-    if (activeTab === "concluidas") return matchesSearch && v.status === "Concluida"
+    if (activeTab === "planejadas") return matchesSearch && status === "Planejada"
+    if (activeTab === "em_andamento") return matchesSearch && status === "Em andamento"
+    if (activeTab === "concluidas") return matchesSearch && status === "Concluida"
     return matchesSearch
   })
 
@@ -502,60 +607,6 @@ export function ViagensClient({
         </Button>
       </div>
 
-      {/* Quick Register Bar */}
-      <Card className="border-dashed border-primary/30 bg-primary/5">
-        <CardContent className="py-3 px-4">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-sm font-medium text-muted-foreground whitespace-nowrap">Cadastro rapido:</span>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-2 bg-transparent" onClick={() => setQuickClienteOpen(true)}>
-                    <Users className="h-4 w-4 text-primary" />
-                    <span className="hidden sm:inline">Cliente</span>
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Cadastrar novo cliente</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-2 bg-transparent" onClick={() => setQuickVeiculoOpen(true)}>
-                    <Truck className="h-4 w-4 text-primary" />
-                    <span className="hidden sm:inline">Veiculo</span>
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Cadastrar novo veiculo</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-2 bg-transparent" onClick={() => setQuickMotoristaOpen(true)}>
-                    <User className="h-4 w-4 text-primary" />
-                    <span className="hidden sm:inline">Motorista</span>
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Cadastrar novo motorista</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-2 bg-transparent" onClick={() => setQuickRotaOpen(true)}>
-                    <Route className="h-4 w-4 text-primary" />
-                    <span className="hidden sm:inline">Rota</span>
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Cadastrar nova rota</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Search */}
       <div className="flex items-center gap-4">
         <div className="relative flex-1 max-w-sm">
@@ -573,21 +624,33 @@ export function ViagensClient({
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="todas">Todas ({viagens.length})</TabsTrigger>
-          <TabsTrigger value="planejadas">Planejadas ({viagens.filter(v => v.status === "Planejada").length})</TabsTrigger>
-          <TabsTrigger value="em_andamento">Em Andamento ({viagens.filter(v => v.status === "Em andamento").length})</TabsTrigger>
-          <TabsTrigger value="concluidas">Concluidas ({viagens.filter(v => v.status === "Concluida").length})</TabsTrigger>
+          <TabsTrigger value="planejadas">Planejadas ({viagens.filter(v => normalizeViagemStatus(v.status) === "Planejada").length})</TabsTrigger>
+          <TabsTrigger value="em_andamento">Em Andamento ({viagens.filter(v => normalizeViagemStatus(v.status) === "Em andamento").length})</TabsTrigger>
+          <TabsTrigger value="concluidas">Concluidas ({viagens.filter(v => normalizeViagemStatus(v.status) === "Concluida").length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-4">
           {filteredViagens.length > 0 ? (
             <div className="grid gap-4">
               {filteredViagens.map((viagem) => (
-                <Card key={viagem.id} className="border-border/50">
-                  <CardContent className="p-4">
+                <Card
+                  key={viagem.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleOpenCockpitModal(viagem.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault()
+                      handleOpenCockpitModal(viagem.id)
+                    }
+                  }}
+                  className="group cursor-pointer border-border/50 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg hover:border-primary/50 hover:bg-primary/5"
+                >
+                  <CardContent className="p-4 transition-colors duration-300 group-hover:bg-primary/10">
                     <div className="flex items-start justify-between">
                       <div className="flex items-start gap-4">
-                        <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center">
-                          <Truck className="h-6 w-6 text-primary" />
+                        <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center transition-all duration-300 group-hover:bg-primary/15 group-hover:scale-105">
+                          <Truck className="h-6 w-6 text-primary transition-transform duration-300 group-hover:scale-110" />
                         </div>
                         <div className="space-y-2">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -599,85 +662,14 @@ export function ViagensClient({
                             <span className="font-medium text-foreground">
                               {viagem.destino_real || "Destino"}
                             </span>
-                            <Badge className={statusColors[viagem.status]}>
-                              {viagem.status}
+                            <Badge className={statusColors[normalizeViagemStatus(viagem.status)]}>
+                              {normalizeViagemStatus(viagem.status)}
                             </Badge>
                           </div>
                           {formatPontosIntermediarios(viagem.rota?.pontos_intermediarios) && (
                             <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                               <span className="font-medium text-foreground/80">Pontos intermediarios:</span>
                               <span>{formatPontosIntermediarios(viagem.rota?.pontos_intermediarios)}</span>
-                            </div>
-                          )}
-                          {parseLocaisAbastecimento(viagem.rota).length > 0 && (
-                            <div className="space-y-2">
-                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <Fuel className="h-3 w-3 text-primary" />
-                                <span className="font-medium text-foreground/80">Pontos de abastecimento:</span>
-                              </div>
-                              <div className="flex flex-col gap-1 ml-5">
-                                {parseLocaisAbastecimento(viagem.rota).map((ponto) => {
-                                  const foiAbastecido = abastecimentosRegistrados[viagem.id]?.includes(ponto)
-                                  return (
-                                    <div key={ponto} className="flex items-center gap-2">
-                                      <Badge className={foiAbastecido ? "bg-success/20 text-success border-success" : "bg-muted/60 text-foreground/80"}>
-                                        {ponto}
-                                      </Badge>
-                                      {viagem.status === "Em andamento" && (
-                                        foiAbastecido ? (
-                                          <Badge variant="outline" className="h-6 px-3 text-xs bg-success/10 text-success border-success">
-                                            <CheckCircle className="w-3 h-3 mr-1" />
-                                            Abastecido
-                                          </Badge>
-                                        ) : (
-                                          <Button
-                                            size="sm"
-                                            variant="default"
-                                            className="h-6 px-3 text-xs font-medium"
-                                            onClick={() => handleAbastecimentoClick(viagem, ponto)}
-                                          >
-                                            <Fuel className="w-3 h-3 mr-1" />
-                                            Registrar
-                                          </Button>
-                                        )
-                                      )}
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          )}
-                          {(viagem.status === "Em andamento" || abastecimentoStatus[viagem.id]) && parseLocaisAbastecimento(viagem.rota).length === 0 && (
-                            <div className="flex items-center gap-2 text-xs flex-wrap">
-                              <span className="text-muted-foreground">Abasteceu na estacao?</span>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant={abastecimentoStatus[viagem.id] === "sim" ? "default" : "outline"}
-                                className="h-7 px-2"
-                                onClick={() => handleAbastecimentoClick(viagem)}
-                              >
-                                Sim
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant={abastecimentoStatus[viagem.id] === "nao" ? "default" : "outline"}
-                                className="h-7 px-2"
-                                onClick={() =>
-                                  setAbastecimentoStatus((prev) => ({
-                                    ...prev,
-                                    [viagem.id]: "nao",
-                                  }))
-                                }
-                              >
-                                Nao
-                              </Button>
-                              {abastecimentoStatus[viagem.id] && (
-                                <Badge className={abastecimentoStatus[viagem.id] === "sim" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}>
-                                  {abastecimentoStatus[viagem.id] === "sim" ? "Abasteceu" : "Nao abasteceu"}
-                                </Badge>
-                              )}
                             </div>
                           )}
                           <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
@@ -700,7 +692,7 @@ export function ViagensClient({
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-3">
                         <div className="text-right">
                           <p className="font-semibold text-foreground flex items-center gap-1 justify-end">
                             <DollarSign className="h-4 w-4 text-success" />
@@ -712,36 +704,42 @@ export function ViagensClient({
                         </div>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
+                          <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
                             <DropdownMenuItem onClick={() => handleEdit(viagem)}>
                               <Pencil className="h-4 w-4 mr-2" />
                               Editar
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            {viagem.status === "Planejada" && (
+                            {normalizeViagemStatus(viagem.status) === "Planejada" && (
                               <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Em andamento")}>
                                 <Play className="h-4 w-4 mr-2" />
                                 Iniciar Viagem
                               </DropdownMenuItem>
                             )}
-                            {viagem.status === "Em andamento" && (
+                            {normalizeViagemStatus(viagem.status) === "Em andamento" && (
                               <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Concluida")}>
                                 <CheckCircle className="h-4 w-4 mr-2" />
                                 Concluir Viagem
                               </DropdownMenuItem>
                             )}
-                            {viagem.status !== "Cancelada" && viagem.status !== "Concluida" && (
+                            {normalizeViagemStatus(viagem.status) !== "Cancelada" && normalizeViagemStatus(viagem.status) !== "Concluida" && (
                               <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Cancelada")}>
                                 <XCircle className="h-4 w-4 mr-2" />
                                 Cancelar
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem 
+                            <DropdownMenuItem
                               onClick={() => handleDelete(viagem)}
                               className="text-destructive focus:text-destructive"
                             >
@@ -771,17 +769,71 @@ export function ViagensClient({
         </TabsContent>
       </Tabs>
 
+      <Dialog
+        open={cockpitOpen}
+        onOpenChange={(open) => {
+          setCockpitOpen(open)
+          if (!open) {
+            setCockpitData(null)
+            setCockpitLoading(false)
+          }
+        }}
+      >
+        <DialogContent className="!w-[70vw] !max-w-[70vw] h-[94vh] overflow-hidden p-0">
+          <div className="h-full min-h-0 flex flex-col">
+            <DialogHeader className="px-4 py-4 sm:px-6 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <DialogTitle>Cockpit da Viagem</DialogTitle>
+              {!cockpitLoading && cockpitData?.viagem && (
+                <p className="text-sm text-muted-foreground">
+                  {cockpitData.viagem.rota?.nome || `${cockpitData.viagem.origem_real || "Origem"} → ${cockpitData.viagem.destino_real || "Destino"}`}
+                </p>
+              )}
+            </DialogHeader>
+
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-5 sm:px-6 sm:py-6 bg-muted/20">
+              {cockpitLoading && (
+                <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                  Carregando cockpit...
+                </div>
+              )}
+              {!cockpitLoading && cockpitData && (
+                <div className="mx-auto w-full max-w-[1400px]">
+                  <ViagemDetalheClient
+                    viagem={cockpitData.viagem}
+                    initialEventos={cockpitData.eventos}
+                    initialCustos={cockpitData.custos}
+                    initialReceitas={cockpitData.receitas}
+                    initialDocumentos={cockpitData.documentos}
+                    etaParametros={cockpitData.parametros}
+                    embedded
+                  />
+                </div>
+              )}
+              {!cockpitLoading && !cockpitData && (
+                <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                  Não foi possível carregar os dados da viagem.
+                </div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Viagem Form Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-4xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {selectedViagem ? "Editar Viagem" : "Nova Viagem"}
             </DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              Preencha o básico primeiro (cliente, veículo, motorista e rota). O restante é opcional e pode ser complementado depois.
+            </div>
+
             {/* Cliente + Status */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
                   <Label>Cliente</Label>
@@ -803,26 +855,33 @@ export function ViagensClient({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid gap-2">
-                <Label>Status</Label>
-                <Select
-                  value={formData.status}
-                  onValueChange={(value) => setFormData({ ...formData, status: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {STATUS_OPTIONS.map((s) => (
-                      <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {selectedViagem ? (
+                <div className="grid gap-2">
+                  <Label>Status</Label>
+                  <Select
+                    value={formData.status}
+                    onValueChange={(value) => setFormData({ ...formData, status: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((s) => (
+                        <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <Label>Status inicial</Label>
+                  <Input value="Planejada" disabled />
+                </div>
+              )}
             </div>
 
             {/* Veiculo + Motorista */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
                   <Label>Veiculo</Label>
@@ -877,6 +936,7 @@ export function ViagensClient({
                   <Plus className="h-3 w-3" /> Nova Rota
                 </Button>
               </div>
+              <p className="text-xs text-muted-foreground">Selecionar a rota preenche origem, destino, km e habilita o planejamento por ponto.</p>
               <Select
                 value={formData.rota_id}
                 onValueChange={handleRotaSelect}
@@ -894,85 +954,143 @@ export function ViagensClient({
               </Select>
             </div>
 
+            {formData.rota_id && formData.planejamento_rota && (
+              <div className="space-y-4 rounded-lg border border-border/70 bg-muted/20 p-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Planejamento da rota</p>
+                  <p className="text-xs text-muted-foreground">
+                    Defina chegada e partida planejadas em cada ponto intermediário da rota.
+                  </p>
+                </div>
+
+                {formData.planejamento_rota.intermediarios.length === 0 && (
+                  <p className="text-xs text-muted-foreground">A rota selecionada não possui pontos intermediários.</p>
+                )}
+
+                {formData.planejamento_rota.intermediarios.length > 0 && (
+                  <div className="space-y-3">
+                    {formData.planejamento_rota.intermediarios.map((ponto, index) => (
+                      <div key={ponto.chave} className="rounded-md border border-border/60 bg-background p-3 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-foreground">
+                            {index + 1}. {ponto.cidade}/{ponto.estado}
+                          </p>
+                          <span className="text-xs text-muted-foreground">{getPontoParadaTipoLabel(ponto.tipo_parada)}</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="grid gap-2">
+                            <Label>Chegada planejada</Label>
+                            <Input
+                              type="datetime-local"
+                              value={ponto.chegada_planejada || ""}
+                              onChange={(e) => updatePlanejamentoIntermediario(index, "chegada_planejada", e.target.value)}
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <Label>Partida planejada</Label>
+                            <Input
+                              type="datetime-local"
+                              value={ponto.partida_planejada || ""}
+                              onChange={(e) => updatePlanejamentoIntermediario(index, "partida_planejada", e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Origem / Destino */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <Label>Origem</Label>
-                <Input
-                  value={formData.origem_real}
-                  onChange={(e) => setFormData({ ...formData, origem_real: e.target.value })}
-                  placeholder="Cidade/UF"
-                />
+            {!formData.rota_id && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label>Origem</Label>
+                  <Input
+                    value={formData.origem_real}
+                    onChange={(e) => setFormData({ ...formData, origem_real: e.target.value })}
+                    placeholder="Cidade/UF"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Destino</Label>
+                  <Input
+                    value={formData.destino_real}
+                    onChange={(e) => setFormData({ ...formData, destino_real: e.target.value })}
+                    placeholder="Cidade/UF"
+                  />
+                </div>
               </div>
-              <div className="grid gap-2">
-                <Label>Destino</Label>
-                <Input
-                  value={formData.destino_real}
-                  onChange={(e) => setFormData({ ...formData, destino_real: e.target.value })}
-                  placeholder="Cidade/UF"
-                />
-              </div>
-            </div>
+            )}
 
             {/* Datas */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="grid gap-2">
-                <Label>Data Inicio</Label>
+                <Label>Partida planejada</Label>
                 <Input
-                  type="date"
+                  type="datetime-local"
                   value={formData.data_inicio}
                   onChange={(e) => setFormData({ ...formData, data_inicio: e.target.value })}
                 />
               </div>
               <div className="grid gap-2">
-                <Label>Data Fim</Label>
+                <Label>Chegada planejada</Label>
                 <Input
-                  type="date"
+                  type="datetime-local"
                   value={formData.data_fim}
                   onChange={(e) => setFormData({ ...formData, data_fim: e.target.value })}
                 />
               </div>
             </div>
 
-            {/* Carga / Volume / KM */}
-            <div className="grid grid-cols-3 gap-4">
-              <div className="grid gap-2">
-                <Label>Tipo de Carga</Label>
-                <Input
-                  value={formData.tipo_carga}
-                  onChange={(e) => setFormData({ ...formData, tipo_carga: e.target.value })}
-                  placeholder="Ex: Graos, Combustivel"
-                />
+            <div className="space-y-4 rounded-lg border border-border/70 p-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">Dados complementares</p>
+                <p className="text-xs text-muted-foreground">Opcional no cadastro inicial. Preencha agora se já tiver os dados.</p>
               </div>
-              <div className="grid gap-2">
-                <Label>Volume (ton)</Label>
-                <Input
-                  type="number"
-                  step="0.001"
-                  value={formData.volume_toneladas}
-                  onChange={(e) => setFormData({ ...formData, volume_toneladas: e.target.value })}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>KM</Label>
-                <Input
-                  type="number"
-                  value={formData.km_real}
-                  onChange={(e) => setFormData({ ...formData, km_real: e.target.value })}
-                />
-              </div>
-            </div>
 
-            {/* Frete */}
-            <div className="grid gap-2">
-              <Label>Valor do Frete (R$)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={formData.valor_frete}
-                onChange={(e) => setFormData({ ...formData, valor_frete: e.target.value })}
-                placeholder="0.00"
-              />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label>Tipo de Carga</Label>
+                  <Input
+                    value={formData.tipo_carga}
+                    onChange={(e) => setFormData({ ...formData, tipo_carga: e.target.value })}
+                    placeholder="Ex: grãos, combustível, refrigerado"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Valor do Frete (R$)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={formData.valor_frete}
+                    onChange={(e) => setFormData({ ...formData, valor_frete: e.target.value })}
+                    placeholder="0,00"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label>Volume (ton)</Label>
+                  <Input
+                    type="number"
+                    step="0.001"
+                    value={formData.volume_toneladas}
+                    onChange={(e) => setFormData({ ...formData, volume_toneladas: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>KM</Label>
+                  <Input
+                    type="number"
+                    value={formData.km_real}
+                    onChange={(e) => setFormData({ ...formData, km_real: e.target.value })}
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-4">
@@ -1042,85 +1160,11 @@ export function ViagensClient({
             origem_real: `${r.origem_cidade}/${r.origem_estado}`,
             destino_real: `${r.destino_cidade}/${r.destino_estado}`,
             km_real: r.km_planejado?.toString() || prev.km_real,
+            planejamento_rota: buildPlanejamentoRota(r, prev.planejamento_rota),
           }))
         }}
       />
 
-      {/* Abastecimento Modal */}
-      <Dialog open={abastecimentoDialogOpen} onOpenChange={setAbastecimentoDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Registrar Abastecimento</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="abast-hodometro">Hodômetro (km) *</Label>
-              <Input
-                id="abast-hodometro"
-                type="number"
-                placeholder="Ex: 45000"
-                value={abastecimentoForm.hodometro}
-                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, hodometro: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="abast-litros">Litros *</Label>
-              <Input
-                id="abast-litros"
-                type="number"
-                step="0.01"
-                placeholder="Ex: 50.5"
-                value={abastecimentoForm.litros}
-                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, litros: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="abast-valor">Valor Total (R$) *</Label>
-              <Input
-                id="abast-valor"
-                type="number"
-                step="0.01"
-                placeholder="Ex: 250.50"
-                value={abastecimentoForm.valor_total}
-                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, valor_total: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="abast-posto">Posto *</Label>
-              <Select value={abastecimentoForm.posto} onValueChange={(value) => setAbastecimentoForm({ ...abastecimentoForm, posto: value })}>
-                <SelectTrigger id="abast-posto">
-                  <SelectValue placeholder="Selecione um ponto..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectedViagemAbastecimento && parseLocaisAbastecimento(selectedViagemAbastecimento.rota).map((ponto) => (
-                    <SelectItem key={ponto} value={ponto}>
-                      {ponto}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="abast-obs">Observação</Label>
-              <Textarea
-                id="abast-obs"
-                placeholder="Observações adicionais"
-                value={abastecimentoForm.observacao}
-                onChange={(e) => setAbastecimentoForm({ ...abastecimentoForm, observacao: e.target.value })}
-                rows={2}
-              />
-            </div>
-            <div className="flex gap-2 justify-end pt-2">
-              <Button variant="outline" onClick={() => setAbastecimentoDialogOpen(false)}>
-                Cancelar
-              </Button>
-              <Button onClick={handleAbastecimentoSubmit}>
-                Registrar
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
