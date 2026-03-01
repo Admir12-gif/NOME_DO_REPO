@@ -32,6 +32,7 @@ import { getPontoParadaTipoLabel, normalizePontoIntermediarioKm, normalizePontoP
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
 import {
   Dialog,
   DialogContent,
@@ -219,6 +220,7 @@ export function ViagemDetalheClient({
   const [eventModalOpen, setEventModalOpen] = useState(false)
   const [activeTimelineEvent, setActiveTimelineEvent] = useState<ViagemEvento | null>(null)
   const [timelineRealModalOpen, setTimelineRealModalOpen] = useState(false)
+  const [expandedTimelinePointId, setExpandedTimelinePointId] = useState<string | null>(null)
   const [costModalOpen, setCostModalOpen] = useState(false)
   const [receitaModalOpen, setReceitaModalOpen] = useState(false)
   const [docModalOpen, setDocModalOpen] = useState(false)
@@ -607,6 +609,67 @@ export function ViagemDetalheClient({
     return Math.max(0, Math.round(kmPlanejado - ultimoKmConcluido))
   }, [kmPlanejado, percursoPlanejado, viagemState.km_restante])
 
+  const progressoRotaPercent = useMemo(() => {
+    if (kmPlanejado <= 0) return 0
+    const perc = ((kmPlanejado - kmRestanteAutomatico) / kmPlanejado) * 100
+    return Math.max(0, Math.min(100, perc))
+  }, [kmPlanejado, kmRestanteAutomatico])
+
+  const kmPercorrido = Math.max(0, kmPlanejado > 0 ? kmPlanejado - kmRestanteAutomatico : kmReal)
+
+  const tempoRestanteHoras = useMemo(() => {
+    if (!viagemState.eta_destino_em) return null
+    const diffMs = new Date(viagemState.eta_destino_em).getTime() - Date.now()
+    return diffMs > 0 ? diffMs / 3600000 : 0
+  }, [viagemState.eta_destino_em])
+
+  const consumoMedioOperacao = useMemo(() => {
+    if (abastecimentosResumo.litros <= 0) return 0
+    const baseKm = kmReal > 0 ? kmReal : kmPercorrido
+    if (baseKm <= 0) return 0
+    return baseKm / abastecimentosResumo.litros
+  }, [abastecimentosResumo.litros, kmPercorrido, kmReal])
+
+  const consumoPrevistoTotalLitros = useMemo(() => {
+    if (kmPlanejado <= 0 || consumoMedioOperacao <= 0) return null
+    return kmPlanejado / consumoMedioOperacao
+  }, [consumoMedioOperacao, kmPlanejado])
+
+  const necessarioAbastecerLitros = useMemo(() => {
+    if (consumoPrevistoTotalLitros === null) return null
+    return Math.max(0, consumoPrevistoTotalLitros - abastecimentosResumo.litros)
+  }, [abastecimentosResumo.litros, consumoPrevistoTotalLitros])
+
+  const primeiroPendenteIndex = useMemo(
+    () =>
+      percursoPlanejado.findIndex((ponto) => {
+        if (ponto.tipo === "origem") return !ponto.partidaReal
+        if (ponto.tipo === "destino") return !ponto.chegadaReal
+        return !ponto.chegadaReal
+      }),
+    [percursoPlanejado],
+  )
+
+  const proximoPontoTimeline =
+    primeiroPendenteIndex >= 0 ? percursoPlanejado[primeiroPendenteIndex] : null
+
+  const clienteNome = viagemState.cliente?.nome || "Sem cliente"
+  const cicloLabel = viagemState.rota?.nome || `C-${viagemState.id.slice(0, 4).toUpperCase()}`
+  const viagemLabel = `V-${viagemState.id.slice(0, 6).toUpperCase()}`
+
+  const proximaAcaoTitulo = proximoMarcoPrevisto
+    ? `${eventTypeLabels[proximoMarcoPrevisto.tipo_evento]} — ${proximoMarcoPrevisto.local || "Ponto operacional"}`
+    : proximoPontoTimeline
+      ? `Chegada — ${proximoPontoTimeline.label}`
+      : "Sem próxima ação planejada"
+
+  const proximaAcaoPrevisao =
+    proximoMarcoPrevisto?.previsto_em ||
+    proximoPontoTimeline?.chegadaPlanejada ||
+    proximoPontoTimeline?.partidaPlanejada ||
+    viagemState.eta_destino_em ||
+    null
+
   const paradasPrevistasPorRota = useMemo(
     () => deriveEtaStopsFromIntermediarios(viagemState.rota?.pontos_intermediarios),
     [viagemState.rota?.pontos_intermediarios],
@@ -690,6 +753,8 @@ export function ViagemDetalheClient({
   }
 
   const salvarTimelineReal = async () => {
+    setLoading(true)
+
     const planejamentoAtual = viagemState.planejamento_rota || {
       origem_partida_planejada: null,
       destino_chegada_planejada: null,
@@ -737,6 +802,8 @@ export function ViagemDetalheClient({
 
       await recalculateEta({ km: kmAtualizado })
     }
+
+    setLoading(false)
   }
 
   const openNewEventModal = (type: EventoViagemTipo) => {
@@ -949,40 +1016,15 @@ export function ViagemDetalheClient({
 
   return (
     <div className={embedded ? "space-y-5 w-full max-w-full overflow-x-hidden pb-1" : "space-y-6"}>
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          {!embedded && (
-            <Link href="/viagens" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-2">
-              <ArrowLeft className="size-4" />
-              Voltar para viagens
-            </Link>
-          )}
-          <h1 className={embedded ? "text-xl font-bold text-foreground" : "text-2xl font-bold text-foreground mt-1"}>Cockpit da Viagem</h1>
-          <p className="text-muted-foreground">
-            {viagemState.rota?.nome || `${viagemState.origem_real || "Origem"} → ${viagemState.destino_real || "Destino"}`}
-          </p>
-        </div>
-
-        <div className={embedded ? "grid grid-cols-1 sm:grid-cols-2 gap-2 w-full" : "grid grid-cols-1 sm:grid-cols-2 gap-2 w-full md:w-auto md:min-w-[340px]"}>
-          <Card className="border-border/50">
-            <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">ETA destino</p>
-              <p className="font-semibold">{formatDateTime(viagemState.eta_destino_em)}</p>
-            </CardContent>
-          </Card>
-          <Card className="border-border/50">
-            <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Atraso estimado</p>
-              <p className={viagemState.atraso_estimado_minutos && viagemState.atraso_estimado_minutos > 0 ? "font-semibold text-destructive" : "font-semibold"}>
-                {viagemState.atraso_estimado_minutos ? `${viagemState.atraso_estimado_minutos > 0 ? "+" : ""}${viagemState.atraso_estimado_minutos} min` : "No prazo"}
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      {!embedded && (
+        <Link href="/viagens" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-2">
+          <ArrowLeft className="size-4" />
+          Voltar para viagens
+        </Link>
+      )}
 
       <Tabs defaultValue="operacao" className="space-y-4 min-h-0">
-        <TabsList className="w-full justify-start overflow-x-auto whitespace-nowrap gap-1 p-1">
+        <TabsList className="w-full justify-start overflow-x-auto whitespace-nowrap gap-1 rounded-xl border border-border/60 bg-muted/40 p-1.5">
           <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="operacao">Operação</TabsTrigger>
           <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="financeiro">Financeiro</TabsTrigger>
           <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="docs">Docs</TabsTrigger>
@@ -990,155 +1032,284 @@ export function ViagemDetalheClient({
         </TabsList>
 
         <TabsContent value="operacao" className="space-y-4 min-h-0">
-          <Card className="border-border/50">
-            <CardContent className="p-4 space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">Status: {statusNormalizado}</Badge>
-                <Badge variant="outline">Fase: {faseOperacional}</Badge>
-                {aderenciaTempo !== null && (
-                  <Badge variant="outline">
-                    Aderência tempo: {aderenciaTempo.toFixed(0)}%
-                  </Badge>
-                )}
-              </div>
-
-              <div className={embedded ? "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3" : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"}>
-                <div className="rounded-md border border-border/70 p-3">
-                  <p className="text-xs text-muted-foreground">Último marco</p>
-                  <p className="text-sm font-medium mt-1">{ultimoMarco ? ultimoMarco.titulo : "Sem eventos"}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{ultimoMarco ? formatDateTime(ultimoMarco.ocorrido_em) : "-"}</p>
-                </div>
-                <div className="rounded-md border border-border/70 p-3">
-                  <p className="text-xs text-muted-foreground">Próximo marco previsto</p>
-                  <p className="text-sm font-medium mt-1">{proximoMarcoPrevisto ? eventTypeLabels[proximoMarcoPrevisto.tipo_evento] : "Sem previsão"}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{proximoMarcoPrevisto ? formatDateTime(proximoMarcoPrevisto.previsto_em) : "-"}</p>
-                </div>
-                <div className="rounded-md border border-border/70 p-3">
-                  <p className="text-xs text-muted-foreground">Desvio de KM</p>
-                  <p className={desvioKm !== null && desvioKm > 0 ? "text-sm font-medium mt-1 text-destructive" : "text-sm font-medium mt-1"}>
-                    {desvioKm !== null ? `${desvioKm > 0 ? "+" : ""}${desvioKm.toFixed(0)} km` : "-"}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">Planejado: {kmPlanejado > 0 ? `${kmPlanejado.toFixed(0)} km` : "-"}</p>
-                </div>
-                <div className="rounded-md border border-border/70 p-3">
-                  <p className="text-xs text-muted-foreground">Prioridade operacional</p>
-                  <p className="text-sm font-medium mt-1">
-                    {(viagemState.atraso_estimado_minutos || 0) > 0 ? "Alta" : statusNormalizado === "Em andamento" ? "Média" : "Normal"}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">{(viagemState.atraso_estimado_minutos || 0) > 0 ? "Com atraso estimado" : "Sem risco imediato"}</p>
-                </div>
-              </div>
-
-              <div className="rounded-md border border-border/70 p-3">
-                <p className="text-xs text-muted-foreground">Ações recomendadas</p>
-                <ul className="mt-2 space-y-1">
-                  {acoesRecomendadas.map((acao) => (
-                    <li key={acao} className="text-sm text-foreground">• {acao}</li>
-                  ))}
-                </ul>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/50">
-            <CardContent className="p-4 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-md border border-border/70 p-3">
-                  <p className="text-xs text-muted-foreground">KM planejado</p>
-                  <p className="text-sm font-medium mt-1">{kmPlanejado > 0 ? `${kmPlanejado.toFixed(0)} km` : "-"}</p>
-                </div>
-                <div className="rounded-md border border-border/70 p-3">
-                  <p className="text-xs text-muted-foreground">KM restante automático</p>
-                  <p className="text-sm font-medium mt-1">{kmRestanteAutomatico.toFixed(0)} km</p>
-                </div>
-                <div className="rounded-md border border-border/70 p-3">
-                  <p className="text-xs text-muted-foreground">Progresso estimado da rota</p>
-                  <p className="text-sm font-medium mt-1">
-                    {kmPlanejado > 0
-                      ? `${(((kmPlanejado - kmRestanteAutomatico) / kmPlanejado) * 100).toFixed(0)}%`
-                      : "-"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size={embedded ? "sm" : "default"}
-                  onClick={() => setTimelineRealModalOpen(true)}
-                >
-                  Preencher realizados
-                </Button>
-                <Button
-                  size={embedded ? "sm" : "default"}
-                  variant="outline"
-                  onClick={() => recalculateEta({ km: kmRestanteAutomatico })}
-                >
-                  Recalcular ETA automático
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/50">
-            <CardHeader className="pb-3">
-              <CardTitle>Timeline da Rota</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Visão planejada e realizada de origem, pontos intermediários e destino.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {percursoPlanejado.length === 0 && (
-                <p className="text-sm text-muted-foreground">Trajeto da rota não definido.</p>
-              )}
-              {percursoPlanejado.map((ponto, index) => (
-                <div key={ponto.id} className="rounded-md border border-border/60 p-3">
-                  <div className="flex items-start gap-2">
-                    <span className="pt-1">
-                      <Circle className={
-                        ponto.tipo === "origem"
-                          ? "size-4 text-primary fill-primary"
-                          : ponto.tipo === "destino"
-                            ? "size-4 text-green-600 fill-green-600"
-                            : ponto.tipoParada === "abastecimento"
-                              ? "size-4 text-amber-500 fill-amber-500"
-                              : ponto.tipoParada === "descarga"
-                                ? "size-4 text-violet-500 fill-violet-500"
-                                : ponto.tipoParada === "ocorrencia"
-                                  ? "size-4 text-destructive fill-destructive"
-                                  : ponto.tipoParada === "descanso"
-                                    ? "size-4 text-cyan-600 fill-cyan-600"
-                                    : "size-4 text-muted-foreground"
-                      } />
+          <Card className="border-border/60 shadow-sm bg-gradient-to-br from-background to-muted/30">
+            <CardContent className="p-5 sm:p-6">
+              <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-5 items-center">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="font-medium">Ciclo {cicloLabel}</Badge>
+                    <Badge variant="outline" className="font-medium">Viagem {viagemLabel}</Badge>
+                    <Badge variant="outline" className="font-medium">Cliente {clienteNome}</Badge>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">COCKPIT DA VIAGEM — TRANSLOG</h2>
+                  <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
+                    Status: <span className="font-semibold uppercase text-foreground">{faseOperacional}</span>
+                    {" · "}
+                    Previsão destino: <span className="font-medium text-foreground">{formatDateTime(viagemState.eta_destino_em)}</span>
+                    {" · "}
+                    Atraso: <span className={(viagemState.atraso_estimado_minutos || 0) > 0 ? "font-semibold text-destructive" : "font-medium text-foreground"}>
+                      {viagemState.atraso_estimado_minutos
+                        ? `${viagemState.atraso_estimado_minutos > 0 ? "+" : ""}${viagemState.atraso_estimado_minutos} min`
+                        : "No prazo"}
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-base font-semibold leading-tight">{ponto.label}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {ponto.tipo === "origem"
-                          ? "Origem"
-                          : ponto.tipo === "destino"
-                            ? "Destino"
-                            : `${getPontoParadaTipoLabel(ponto.tipoParada)} · Ponto intermediário ${ponto.ordemIntermediario || index}`}
-                      </p>
-                      {(ponto.chegadaPlanejada || ponto.partidaPlanejada) && (
-                        <p className="text-sm text-muted-foreground mt-2">
-                          {ponto.chegadaPlanejada ? `Chegada planejada: ${formatDateTime(ponto.chegadaPlanejada)}` : ""}
-                          {ponto.chegadaPlanejada && ponto.partidaPlanejada ? " • " : ""}
-                          {ponto.partidaPlanejada ? `Partida planejada: ${formatDateTime(ponto.partidaPlanejada)}` : ""}
-                        </p>
-                      )}
-                      {(ponto.chegadaReal || ponto.partidaReal) && (
-                        <p className="text-sm text-foreground mt-1">
-                          {ponto.chegadaReal ? `Chegada real: ${formatDateTime(ponto.chegadaReal)}` : ""}
-                          {ponto.chegadaReal && ponto.partidaReal ? " • " : ""}
-                          {ponto.partidaReal ? `Partida real: ${formatDateTime(ponto.partidaReal)}` : ""}
-                        </p>
-                      )}
-                    </div>
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-border/70 bg-background/70 p-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <p className="text-muted-foreground">Progresso da rota</p>
+                    <p className="font-semibold">{progressoRotaPercent.toFixed(0)}%</p>
+                  </div>
+                  <Progress value={progressoRotaPercent} className="h-3" />
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Percorrido: {kmPercorrido.toFixed(0)} km</span>
+                    <span>Restante: {kmRestanteAutomatico.toFixed(0)} km</span>
                   </div>
                 </div>
-              ))}
+              </div>
             </CardContent>
           </Card>
+
+          <div className={embedded ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 xl:grid-cols-12 gap-4"}>
+            <Card className={embedded ? "border-border/60 shadow-sm" : "border-border/60 shadow-sm xl:col-span-8"}>
+              <CardHeader className="pb-2 border-b border-border/50 bg-muted/20 rounded-t-xl">
+                <CardTitle className="text-xl">TIMELINE — Planejado vs Real</CardTitle>
+                <p className="text-sm text-muted-foreground">Evolução da viagem com comparação entre previsto e realizado.</p>
+              </CardHeader>
+              <CardContent className="space-y-3 p-4 sm:p-5">
+                {percursoPlanejado.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                    Trajeto da rota não definido.
+                  </div>
+                )}
+
+                {percursoPlanejado.map((ponto, index) => {
+                  const previsto = ponto.tipo === "origem" ? ponto.partidaPlanejada : ponto.chegadaPlanejada
+                  const realizado = ponto.tipo === "origem" ? ponto.partidaReal : ponto.chegadaReal
+                  const concluido = ponto.tipo === "origem"
+                    ? Boolean(ponto.partidaReal)
+                    : ponto.tipo === "destino"
+                      ? Boolean(ponto.chegadaReal)
+                      : Boolean(ponto.chegadaReal)
+                  const emTransito = !concluido && index === primeiroPendenteIndex
+
+                  const deltaMin = previsto && realizado
+                    ? Math.round((new Date(realizado).getTime() - new Date(previsto).getTime()) / 60000)
+                    : null
+
+                  const itemTone = concluido
+                    ? "border-emerald-500/30 bg-emerald-500/5"
+                    : emTransito
+                      ? "border-primary/40 bg-primary/5"
+                      : "border-border/70 bg-background"
+
+                  const markerTone = concluido
+                    ? "bg-emerald-500/15 text-emerald-700"
+                    : emTransito
+                      ? "bg-primary/15 text-primary"
+                      : "bg-muted text-muted-foreground"
+
+                  const tipoPontoLabel = ponto.tipo === "origem"
+                    ? "Origem"
+                    : ponto.tipo === "destino"
+                      ? "Destino"
+                      : getPontoParadaTipoLabel(ponto.tipoParada)
+
+                  const isExpanded = expandedTimelinePointId === ponto.id
+                  const intermediarioIndex = ponto.tipo === "intermediario"
+                    ? Math.max(0, (ponto.ordemIntermediario || 1) - 1)
+                    : -1
+                  const intermediarioReal = intermediarioIndex >= 0
+                    ? timelineReal.intermediarios[intermediarioIndex]
+                    : null
+
+                  return (
+                    <div
+                      key={ponto.id}
+                      className={`rounded-xl border p-3 sm:p-4 transition-colors cursor-pointer ${itemTone}`}
+                      onClick={() => setExpandedTimelinePointId((prev) => (prev === ponto.id ? null : ponto.id))}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold ${markerTone}`}>
+                          {concluido ? "●" : emTransito ? "▶" : "○"}
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-base font-semibold leading-tight">{ponto.label}</p>
+                            <Badge variant="outline" className="text-[11px] uppercase tracking-wide">{tipoPontoLabel}</Badge>
+                            {emTransito && <Badge className="text-[11px]">Em trânsito</Badge>}
+                          </div>
+                          <p className="text-sm text-muted-foreground">Previsto: {formatDateTime(previsto || null)}</p>
+                          {realizado && <p className="text-sm">Realizado: <span className="font-medium">{formatDateTime(realizado)}</span></p>}
+                          {deltaMin !== null && (
+                            <p className={deltaMin > 0 ? "text-xs font-medium text-destructive" : "text-xs font-medium text-emerald-700"}>
+                              {deltaMin > 0
+                                ? `Atraso de +${deltaMin} min`
+                                : deltaMin < 0
+                                  ? `Antecipado em ${Math.abs(deltaMin)} min`
+                                  : "No horário"}
+                            </p>
+                          )}
+
+                          {!isExpanded && (
+                            <p className="text-xs text-primary/80 pt-1">Clique para registrar horário real</p>
+                          )}
+
+                          {isExpanded && (
+                            <div
+                              className="mt-3 rounded-lg border border-border/70 bg-background/80 p-3 space-y-3"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              {ponto.tipo === "origem" && (
+                                <div className="grid gap-2">
+                                  <Label className="text-xs">Partida real</Label>
+                                  <Input
+                                    type="datetime-local"
+                                    value={timelineReal.origem_partida_real || ""}
+                                    onChange={(event) =>
+                                      setTimelineReal((prev) => ({
+                                        ...prev,
+                                        origem_partida_real: event.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                              )}
+
+                              {ponto.tipo === "intermediario" && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <div className="grid gap-2">
+                                    <Label className="text-xs">Chegada real</Label>
+                                    <Input
+                                      type="datetime-local"
+                                      value={intermediarioReal?.chegada_real || ""}
+                                      onChange={(event) =>
+                                        updateTimelineRealIntermediario(intermediarioIndex, "chegada_real", event.target.value)
+                                      }
+                                    />
+                                  </div>
+                                  <div className="grid gap-2">
+                                    <Label className="text-xs">Partida real</Label>
+                                    <Input
+                                      type="datetime-local"
+                                      value={intermediarioReal?.partida_real || ""}
+                                      onChange={(event) =>
+                                        updateTimelineRealIntermediario(intermediarioIndex, "partida_real", event.target.value)
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
+                              {ponto.tipo === "destino" && (
+                                <div className="grid gap-2">
+                                  <Label className="text-xs">Chegada real</Label>
+                                  <Input
+                                    type="datetime-local"
+                                    value={timelineReal.destino_chegada_real || ""}
+                                    onChange={(event) =>
+                                      setTimelineReal((prev) => ({
+                                        ...prev,
+                                        destino_chegada_real: event.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                              )}
+
+                              <div className="flex flex-wrap gap-2 pt-1">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  onClick={async () => {
+                                    await salvarTimelineReal()
+                                    setExpandedTimelinePointId(null)
+                                  }}
+                                  disabled={loading}
+                                >
+                                  Salvar horário real
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setExpandedTimelinePointId(null)}
+                                >
+                                  Cancelar
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {proximoPontoTimeline && (
+                  <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+                    <p className="text-base font-semibold text-primary">
+                      ▶ EM TRÂNSITO → {proximoPontoTimeline.label}
+                    </p>
+                    <p className="text-sm mt-1">
+                      Distância restante: <span className="font-medium">{kmRestanteAutomatico.toFixed(0)} km</span>
+                      {" · "}
+                      Previsão de chegada: <span className="font-medium">{formatDateTime((proximoPontoTimeline.chegadaPlanejada || viagemState.eta_destino_em) || null)}</span>
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className={embedded ? "border-border/60 shadow-sm" : "border-border/60 shadow-sm xl:col-span-4"}>
+              <CardContent className="p-4 sm:p-5 space-y-4">
+                <section className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-1">
+                  <h3 className="text-lg font-semibold uppercase tracking-wide">Próxima ação</h3>
+                  <p className="text-xl font-semibold leading-tight">{proximaAcaoTitulo}</p>
+                  <p className="text-sm text-muted-foreground">Previsão: {formatDateTime(proximaAcaoPrevisao)}</p>
+                  <p className="text-sm text-muted-foreground">
+                    Tempo estimado: {tempoRestanteHoras !== null ? `${tempoRestanteHoras.toFixed(1)}h` : "-"}
+                  </p>
+                </section>
+
+                <section className="rounded-xl border border-border/70 p-4 space-y-3">
+                  <h3 className="text-lg font-semibold uppercase tracking-wide">Indicadores</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="rounded-lg bg-muted/30 p-2.5">
+                      <p className="text-xs text-muted-foreground">KM total</p>
+                      <p className="text-lg font-semibold">{(kmPlanejado > 0 ? kmPlanejado : kmReal).toFixed(0)}</p>
+                    </div>
+                    <div className="rounded-lg bg-muted/30 p-2.5">
+                      <p className="text-xs text-muted-foreground">KM percorrido</p>
+                      <p className="text-lg font-semibold">{kmPercorrido.toFixed(0)}</p>
+                    </div>
+                    <div className="rounded-lg bg-muted/30 p-2.5">
+                      <p className="text-xs text-muted-foreground">KM restante</p>
+                      <p className="text-lg font-semibold">{kmRestanteAutomatico.toFixed(0)}</p>
+                    </div>
+                    <div className="rounded-lg bg-muted/30 p-2.5">
+                      <p className="text-xs text-muted-foreground">Tempo restante</p>
+                      <p className="text-lg font-semibold">{tempoRestanteHoras !== null ? `${tempoRestanteHoras.toFixed(1)}h` : "-"}</p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border/70 p-2.5">
+                    <p className="text-xs text-muted-foreground">Consumo médio</p>
+                    <p className="text-base font-semibold">{consumoMedioOperacao > 0 ? `${consumoMedioOperacao.toFixed(1)} km/L` : "-"}</p>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-border/70 p-4 space-y-2">
+                  <h3 className="text-lg font-semibold uppercase tracking-wide">Combustível do ciclo</h3>
+                  <div className="space-y-1 text-sm sm:text-base">
+                    <p>Abastecido no ciclo: <span className="font-semibold">{abastecimentosResumo.litros.toFixed(0)} L</span></p>
+                    <p>Consumo previsto total: <span className="font-semibold">{consumoPrevistoTotalLitros !== null ? `${consumoPrevistoTotalLitros.toFixed(0)} L` : "-"}</span></p>
+                    <p>Necessário abastecer: <span className="font-semibold">{necessarioAbastecerLitros !== null ? `${necessarioAbastecerLitros.toFixed(0)} L` : "-"}</span></p>
+                  </div>
+                </section>
+
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="financeiro" className="space-y-4 min-h-0">

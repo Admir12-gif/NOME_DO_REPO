@@ -781,15 +781,6 @@ export function ViagensClient({
       >
         <DialogContent className="!w-[70vw] !max-w-[70vw] h-[94vh] overflow-hidden p-0">
           <div className="h-full min-h-0 flex flex-col">
-            <DialogHeader className="px-4 py-4 sm:px-6 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-              <DialogTitle>Cockpit da Viagem</DialogTitle>
-              {!cockpitLoading && cockpitData?.viagem && (
-                <p className="text-sm text-muted-foreground">
-                  {cockpitData.viagem.rota?.nome || `${cockpitData.viagem.origem_real || "Origem"} → ${cockpitData.viagem.destino_real || "Destino"}`}
-                </p>
-              )}
-            </DialogHeader>
-
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-5 sm:px-6 sm:py-6 bg-muted/20">
               {cockpitLoading && (
                 <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
