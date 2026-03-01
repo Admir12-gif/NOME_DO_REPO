@@ -39,6 +39,7 @@ import {
   type PontoIntermediario,
   type PostoAbastecimento,
   PONTO_PARADA_TIPO_OPTIONS,
+  normalizePontoIntermediarioKm,
   normalizePontoParadaTipo,
 } from "@/lib/types"
 import { Route, ArrowRight, Plus, X, GripVertical } from "lucide-react"
@@ -118,6 +119,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
     setPontosIntermediarios(
       (rota.pontos_intermediarios || []).map((ponto) => ({
         ...ponto,
+        km: normalizePontoIntermediarioKm(ponto.km),
         tipo_parada: normalizePontoParadaTipo(ponto.tipo_parada),
       })),
     )
@@ -148,7 +150,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
   const addPonto = () => {
     setPontosIntermediarios([
       ...pontosIntermediarios,
-      { cidade: "", estado: "", tipo_parada: "parada", observacao: "" },
+      { cidade: "", estado: "", km: null, tipo_parada: "parada", observacao: "" },
     ])
   }
 
@@ -156,7 +158,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
     setPontosIntermediarios(pontosIntermediarios.filter((_, i) => i !== index))
   }
 
-  const updatePonto = (index: number, field: keyof PontoIntermediario, value: string) => {
+  const updatePonto = (index: number, field: keyof PontoIntermediario, value: string | number | null) => {
     const updated = [...pontosIntermediarios]
     updated[index] = { ...updated[index], [field]: value }
     setPontosIntermediarios(updated)
@@ -178,6 +180,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
         .filter(p => p.cidade.trim() !== "")
         .map((ponto) => ({
           ...ponto,
+          km: normalizePontoIntermediarioKm(ponto.km),
           tipo_parada: normalizePontoParadaTipo(ponto.tipo_parada),
         }))
 
@@ -386,7 +389,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
                         <X className="h-4 w-4" />
                       </Button>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
                       <div className="md:col-span-2 grid gap-1">
                         <Label className="text-xs">Cidade</Label>
                         <Input value={ponto.cidade} onChange={(e) => updatePonto(index, "cidade", e.target.value)} placeholder="Cidade" />
@@ -397,6 +400,17 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
                           <SelectTrigger><SelectValue placeholder="UF" /></SelectTrigger>
                           <SelectContent>{ESTADOS.map((uf) => (<SelectItem key={uf} value={uf}>{uf}</SelectItem>))}</SelectContent>
                         </Select>
+                      </div>
+                      <div className="grid gap-1">
+                        <Label className="text-xs">KM</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          value={ponto.km ?? ""}
+                          onChange={(e) => updatePonto(index, "km", e.target.value)}
+                          placeholder="KM da origem"
+                        />
                       </div>
                       <div className="md:col-span-2 grid gap-1">
                         <Label className="text-xs">Tipo</Label>

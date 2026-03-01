@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import {
   ArrowLeft,
@@ -28,7 +28,7 @@ import type {
   ViagemDocumento,
   ViagemEvento,
 } from "@/lib/types"
-import { getPontoParadaTipoLabel, normalizePontoParadaTipo } from "@/lib/types"
+import { getPontoParadaTipoLabel, normalizePontoIntermediarioKm, normalizePontoParadaTipo } from "@/lib/types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -164,6 +164,11 @@ function toDatetimeLocal(value?: string | null) {
   return date.toISOString().slice(0, 16)
 }
 
+function toIsoOrNull(value?: string | null) {
+  if (!value) return null
+  return new Date(value).toISOString()
+}
+
 function normalizeCategoria(categoria?: string | null): CustoViagem["categoria"] {
   if (!categoria) return "Outros"
 
@@ -213,6 +218,7 @@ export function ViagemDetalheClient({
 
   const [eventModalOpen, setEventModalOpen] = useState(false)
   const [activeTimelineEvent, setActiveTimelineEvent] = useState<ViagemEvento | null>(null)
+  const [timelineRealModalOpen, setTimelineRealModalOpen] = useState(false)
   const [costModalOpen, setCostModalOpen] = useState(false)
   const [receitaModalOpen, setReceitaModalOpen] = useState(false)
   const [docModalOpen, setDocModalOpen] = useState(false)
@@ -248,9 +254,31 @@ export function ViagemDetalheClient({
     observacao: "",
   })
   const [selectedDocFile, setSelectedDocFile] = useState<File | null>(null)
+  const [timelineReal, setTimelineReal] = useState(() => ({
+    origem_partida_real: toDatetimeLocal(viagem.planejamento_rota?.origem_partida_real || null),
+    destino_chegada_real: toDatetimeLocal(viagem.planejamento_rota?.destino_chegada_real || null),
+    intermediarios: (viagem.planejamento_rota?.intermediarios || []).map((item) => ({
+      chave: item.chave,
+      cidade: item.cidade,
+      estado: item.estado,
+      chegada_real: toDatetimeLocal(item.chegada_real || null),
+      partida_real: toDatetimeLocal(item.partida_real || null),
+    })),
+  }))
 
-  const [kmRestante, setKmRestante] = useState(String(viagem.km_restante || viagem.km_real || 0))
-  const [velocidadeMedia, setVelocidadeMedia] = useState(String(viagem.velocidade_media_kmh || ""))
+  useEffect(() => {
+    setTimelineReal({
+      origem_partida_real: toDatetimeLocal(viagemState.planejamento_rota?.origem_partida_real || null),
+      destino_chegada_real: toDatetimeLocal(viagemState.planejamento_rota?.destino_chegada_real || null),
+      intermediarios: (viagemState.planejamento_rota?.intermediarios || []).map((item) => ({
+        chave: item.chave,
+        cidade: item.cidade,
+        estado: item.estado,
+        chegada_real: toDatetimeLocal(item.chegada_real || null),
+        partida_real: toDatetimeLocal(item.partida_real || null),
+      })),
+    })
+  }, [viagemState.planejamento_rota])
 
   const eventosOrdenados = useMemo(
     () => [...eventos].sort((a, b) => new Date(b.ocorrido_em).getTime() - new Date(a.ocorrido_em).getTime()),
@@ -413,8 +441,24 @@ export function ViagemDetalheClient({
 
   const percursoPlanejado = useMemo(() => {
     const planejamento = viagemState.planejamento_rota
+    const planejamentoIntermediarios = (planejamento?.intermediarios || []) as Array<{
+      chave?: string
+      cidade?: string
+      estado?: string
+      chegada_planejada?: string | null
+      partida_planejada?: string | null
+      chegadaPlanejada?: string | null
+      partidaPlanejada?: string | null
+    }>
     const planejamentoPorChave = new Map(
-      (planejamento?.intermediarios || []).map((item) => [item.chave, item]),
+      planejamentoIntermediarios
+        .filter((item) => !!item.chave)
+        .map((item) => [item.chave as string, item]),
+    )
+    const timelineRealPorChave = new Map(
+      (timelineReal.intermediarios || [])
+        .filter((item) => !!item.chave)
+        .map((item) => [item.chave, item]),
     )
 
     const origem =
@@ -436,8 +480,17 @@ export function ViagemDetalheClient({
         const tipoParada = normalizePontoParadaTipo(ponto.tipo_parada)
         const chave = buildIntermediarioChave(ponto.cidade, ponto.estado, index)
         const planejamentoIntermediario =
+          planejamentoIntermediarios[index] ||
           planejamentoPorChave.get(chave) ||
-          (planejamento?.intermediarios || []).find(
+          planejamentoIntermediarios.find(
+            (item) =>
+              (item.cidade || "").trim().toLowerCase() === (ponto.cidade || "").trim().toLowerCase() &&
+              (item.estado || "").trim().toLowerCase() === (ponto.estado || "").trim().toLowerCase(),
+          )
+        const realizadoIntermediario =
+          timelineReal.intermediarios[index] ||
+          timelineRealPorChave.get(chave) ||
+          timelineReal.intermediarios.find(
             (item) =>
               (item.cidade || "").trim().toLowerCase() === (ponto.cidade || "").trim().toLowerCase() &&
               (item.estado || "").trim().toLowerCase() === (ponto.estado || "").trim().toLowerCase(),
@@ -448,9 +501,18 @@ export function ViagemDetalheClient({
           label: cidadeEstado,
           tipo: "intermediario" as const,
           tipoParada,
+          kmPonto: normalizePontoIntermediarioKm(ponto.km),
           ordemIntermediario: index + 1,
-          chegadaPlanejada: planejamentoIntermediario?.chegada_planejada || null,
-          partidaPlanejada: planejamentoIntermediario?.partida_planejada || null,
+          chegadaPlanejada:
+            planejamentoIntermediario?.chegada_planejada ||
+            planejamentoIntermediario?.chegadaPlanejada ||
+            null,
+          partidaPlanejada:
+            planejamentoIntermediario?.partida_planejada ||
+            planejamentoIntermediario?.partidaPlanejada ||
+            null,
+          chegadaReal: realizadoIntermediario?.chegada_real || null,
+          partidaReal: realizadoIntermediario?.partida_real || null,
         }
       })
       .filter(Boolean) as Array<{
@@ -458,9 +520,12 @@ export function ViagemDetalheClient({
         label: string
         tipo: "intermediario"
         tipoParada: ReturnType<typeof normalizePontoParadaTipo>
+        kmPonto: number | null
         ordemIntermediario: number
         chegadaPlanejada: string | null
         partidaPlanejada: string | null
+        chegadaReal: string | null
+        partidaReal: string | null
       }>
 
     const pontos: Array<{
@@ -468,9 +533,12 @@ export function ViagemDetalheClient({
       label: string
       tipo: "origem" | "intermediario" | "destino"
       tipoParada?: ReturnType<typeof normalizePontoParadaTipo>
+      kmPonto?: number | null
       ordemIntermediario?: number
       chegadaPlanejada?: string | null
       partidaPlanejada?: string | null
+      chegadaReal?: string | null
+      partidaReal?: string | null
     }> = []
 
     if (origem) {
@@ -478,7 +546,9 @@ export function ViagemDetalheClient({
         id: `origem-${origem}`,
         label: origem,
         tipo: "origem",
+        kmPonto: 0,
         partidaPlanejada: planejamento?.origem_partida_planejada || viagemState.data_inicio || null,
+        partidaReal: timelineReal.origem_partida_real || null,
       })
     }
 
@@ -489,7 +559,9 @@ export function ViagemDetalheClient({
         id: `destino-${destino}`,
         label: destino,
         tipo: "destino",
+        kmPonto: kmPlanejado > 0 ? kmPlanejado : null,
         chegadaPlanejada: planejamento?.destino_chegada_planejada || viagemState.data_fim || null,
+        chegadaReal: timelineReal.destino_chegada_real || null,
       })
     }
 
@@ -501,7 +573,39 @@ export function ViagemDetalheClient({
     viagemState.origem_real,
     viagemState.planejamento_rota,
     viagemState.rota,
+    timelineReal,
   ])
+
+  const kmRestanteAutomatico = useMemo(() => {
+    if (percursoPlanejado.length < 2 || kmPlanejado <= 0) {
+      return Number(viagemState.km_restante || 0)
+    }
+
+    const totalTrechos = Math.max(1, percursoPlanejado.length - 1)
+    const kmPorIndice = (index: number) => (index / totalTrechos) * kmPlanejado
+
+    const resolvedKmPorPonto = percursoPlanejado.map((ponto, index) => {
+      const kmInformado = normalizePontoIntermediarioKm(ponto.kmPonto)
+      if (kmInformado === null) return kmPorIndice(index)
+      if (kmInformado > kmPlanejado) return kmPlanejado
+      return kmInformado
+    })
+
+    let ultimoKmConcluido = 0
+    percursoPlanejado.forEach((ponto, index) => {
+      const concluido = ponto.tipo === "origem"
+        ? Boolean(ponto.partidaReal)
+        : ponto.tipo === "destino"
+          ? Boolean(ponto.chegadaReal)
+          : Boolean(ponto.chegadaReal)
+
+      if (concluido) {
+        ultimoKmConcluido = Math.max(ultimoKmConcluido, resolvedKmPorPonto[index] || 0)
+      }
+    })
+
+    return Math.max(0, Math.round(kmPlanejado - ultimoKmConcluido))
+  }, [kmPlanejado, percursoPlanejado, viagemState.km_restante])
 
   const paradasPrevistasPorRota = useMemo(
     () => deriveEtaStopsFromIntermediarios(viagemState.rota?.pontos_intermediarios),
@@ -509,8 +613,8 @@ export function ViagemDetalheClient({
   )
 
   const recalculateEta = async (override?: { km?: number; velocidade?: number }) => {
-    const km = override?.km ?? Number(kmRestante || 0)
-    const velocidade = override?.velocidade ?? (velocidadeMedia ? Number(velocidadeMedia) : undefined)
+    const km = override?.km ?? kmRestanteAutomatico
+    const velocidade = override?.velocidade
 
     const result = calculateEta({
       viagem: {
@@ -520,7 +624,7 @@ export function ViagemDetalheClient({
         motorista_id: viagemState.motorista_id,
         veiculo_id: viagemState.veiculo_id,
         eta_destino_em: viagemState.eta_destino_em,
-        velocidade_media_kmh: velocidade ?? null,
+        velocidade_media_kmh: velocidade ?? viagemState.velocidade_media_kmh,
       },
       eventos,
       parametros: etaParametros,
@@ -560,6 +664,78 @@ export function ViagemDetalheClient({
 
     if (!error) {
       setViagemState((prev) => ({ ...prev, ...payload }))
+    }
+  }
+
+  const updateTimelineRealIntermediario = (
+    index: number,
+    field: "chegada_real" | "partida_real",
+    value: string,
+  ) => {
+    setTimelineReal((prev) => {
+      const intermediarios = [...prev.intermediarios]
+      const current = intermediarios[index]
+      if (!current) return prev
+
+      intermediarios[index] = {
+        ...current,
+        [field]: value,
+      }
+
+      return {
+        ...prev,
+        intermediarios,
+      }
+    })
+  }
+
+  const salvarTimelineReal = async () => {
+    const planejamentoAtual = viagemState.planejamento_rota || {
+      origem_partida_planejada: null,
+      destino_chegada_planejada: null,
+      intermediarios: [],
+    }
+
+    const realizadosPorChave = new Map(
+      timelineReal.intermediarios
+        .filter((item) => !!item.chave)
+        .map((item) => [item.chave, item]),
+    )
+
+    const intermediariosAtualizados = (planejamentoAtual.intermediarios || []).map((item, index) => {
+      const realizado = timelineReal.intermediarios[index] || realizadosPorChave.get(item.chave)
+      return {
+        ...item,
+        chegada_real: toIsoOrNull(realizado?.chegada_real),
+        partida_real: toIsoOrNull(realizado?.partida_real),
+      }
+    })
+
+    const planejamentoAtualizado = {
+      ...planejamentoAtual,
+      origem_partida_real: toIsoOrNull(timelineReal.origem_partida_real),
+      destino_chegada_real: toIsoOrNull(timelineReal.destino_chegada_real),
+      intermediarios: intermediariosAtualizados,
+    }
+
+    const kmAtualizado = kmRestanteAutomatico
+
+    const { error } = await supabase
+      .from("viagens")
+      .update({
+        planejamento_rota: planejamentoAtualizado,
+        km_restante: kmAtualizado,
+      })
+      .eq("id", viagemState.id)
+
+    if (!error) {
+      setViagemState((prev) => ({
+        ...prev,
+        planejamento_rota: planejamentoAtualizado,
+        km_restante: kmAtualizado,
+      }))
+
+      await recalculateEta({ km: kmAtualizado })
     }
   }
 
@@ -866,92 +1042,57 @@ export function ViagemDetalheClient({
 
           <Card className="border-border/50">
             <CardContent className="p-4 space-y-4">
-              <div className={embedded ? "flex flex-wrap gap-2" : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2"}>
-                {eventQuickActions.map((action) => (
-                  <Button
-                    key={action.label}
-                    onClick={() => openNewEventModal(action.type)}
-                    variant={embedded ? "secondary" : "default"}
-                    size={embedded ? "sm" : "default"}
-                    className={embedded ? "justify-start h-7 px-2.5 text-[12px] font-medium whitespace-nowrap rounded-md" : "justify-start h-auto min-h-10 py-2 px-3 text-xs sm:text-sm whitespace-normal"}
-                  >
-                    <Plus className={embedded ? "size-3.5 mr-1.5 shrink-0" : "size-4 mr-1"} />
-                    {embedded ? eventQuickActionsCompactLabel[action.type] : action.label}
-                  </Button>
-                ))}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-md border border-border/70 p-3">
+                  <p className="text-xs text-muted-foreground">KM planejado</p>
+                  <p className="text-sm font-medium mt-1">{kmPlanejado > 0 ? `${kmPlanejado.toFixed(0)} km` : "-"}</p>
+                </div>
+                <div className="rounded-md border border-border/70 p-3">
+                  <p className="text-xs text-muted-foreground">KM restante automático</p>
+                  <p className="text-sm font-medium mt-1">{kmRestanteAutomatico.toFixed(0)} km</p>
+                </div>
+                <div className="rounded-md border border-border/70 p-3">
+                  <p className="text-xs text-muted-foreground">Progresso estimado da rota</p>
+                  <p className="text-sm font-medium mt-1">
+                    {kmPlanejado > 0
+                      ? `${(((kmPlanejado - kmRestanteAutomatico) / kmPlanejado) * 100).toFixed(0)}%`
+                      : "-"}
+                  </p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div>
-                  <Label>Km restante</Label>
-                  <Input value={kmRestante} onChange={(event) => setKmRestante(event.target.value)} type="number" />
-                </div>
-                <div>
-                  <Label>Velocidade média (km/h)</Label>
-                  <Input value={velocidadeMedia} onChange={(event) => setVelocidadeMedia(event.target.value)} type="number" />
-                </div>
-                <div className="md:col-span-2 flex items-end">
-                  <Button
-                    size={embedded ? "sm" : "default"}
-                    variant="outline"
-                    className={embedded ? "w-full sm:w-auto" : undefined}
-                    onClick={() => recalculateEta({ km: Number(kmRestante || 0), velocidade: Number(velocidadeMedia || 0) })}
-                  >
-                    Recalcular ETA
-                  </Button>
-                </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size={embedded ? "sm" : "default"}
+                  onClick={() => setTimelineRealModalOpen(true)}
+                >
+                  Preencher realizados
+                </Button>
+                <Button
+                  size={embedded ? "sm" : "default"}
+                  variant="outline"
+                  onClick={() => recalculateEta({ km: kmRestanteAutomatico })}
+                >
+                  Recalcular ETA automático
+                </Button>
               </div>
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <Card className="border-border/50 lg:col-span-2">
-              <CardHeader>
-                <CardTitle>Últimos eventos</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {eventosOrdenados.length === 0 && (
-                  <p className="text-sm text-muted-foreground">Sem eventos registrados.</p>
-                )}
-                {eventosOrdenados.map((evento) => (
-                  <button
-                    key={evento.id}
-                    className="w-full text-left rounded-md border border-border/70 p-3 hover:bg-muted/40"
-                    onClick={() => {
-                      setActiveTimelineEvent(evento)
-                      setEventModalOpen(true)
-                      setEventForm({
-                        tipo_evento: evento.tipo_evento,
-                        status_evento: evento.status_evento,
-                        titulo: evento.titulo,
-                        local: evento.local || "",
-                        observacao: evento.observacao || "",
-                        impacto_minutos: String(evento.impacto_minutos || 0),
-                        previsto_em: toDatetimeLocal(evento.previsto_em),
-                        comprovante_url: evento.comprovante_url || "",
-                      })
-                    }}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="font-medium break-words">{formatDateTime(evento.ocorrido_em)} — {evento.titulo}</p>
-                      <Badge variant="outline">{eventStatusLabel[evento.status_evento]}</Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground mt-1">{eventTypeLabels[evento.tipo_evento]} {evento.local ? `• ${evento.local}` : ""}</p>
-                  </button>
-                ))}
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50">
-              <CardHeader>
-                <CardTitle>Timeline</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {percursoPlanejado.length === 0 && (
-                  <p className="text-sm text-muted-foreground">Trajeto da rota não definido.</p>
-                )}
-                {percursoPlanejado.map((ponto, index) => (
-                  <div key={ponto.id} className="flex items-start gap-2">
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <CardTitle>Timeline da Rota</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Visão planejada e realizada de origem, pontos intermediários e destino.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {percursoPlanejado.length === 0 && (
+                <p className="text-sm text-muted-foreground">Trajeto da rota não definido.</p>
+              )}
+              {percursoPlanejado.map((ponto, index) => (
+                <div key={ponto.id} className="rounded-md border border-border/60 p-3">
+                  <div className="flex items-start gap-2">
                     <span className="pt-1">
                       <Circle className={
                         ponto.tipo === "origem"
@@ -969,9 +1110,9 @@ export function ViagemDetalheClient({
                                     : "size-4 text-muted-foreground"
                       } />
                     </span>
-                    <div>
-                      <p className="text-sm font-medium">{ponto.label}</p>
-                      <p className="text-xs text-muted-foreground">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-base font-semibold leading-tight">{ponto.label}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
                         {ponto.tipo === "origem"
                           ? "Origem"
                           : ponto.tipo === "destino"
@@ -979,18 +1120,25 @@ export function ViagemDetalheClient({
                             : `${getPontoParadaTipoLabel(ponto.tipoParada)} · Ponto intermediário ${ponto.ordemIntermediario || index}`}
                       </p>
                       {(ponto.chegadaPlanejada || ponto.partidaPlanejada) && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {ponto.chegadaPlanejada ? `Chegada: ${formatDateTime(ponto.chegadaPlanejada)}` : ""}
+                        <p className="text-sm text-muted-foreground mt-2">
+                          {ponto.chegadaPlanejada ? `Chegada planejada: ${formatDateTime(ponto.chegadaPlanejada)}` : ""}
                           {ponto.chegadaPlanejada && ponto.partidaPlanejada ? " • " : ""}
-                          {ponto.partidaPlanejada ? `Partida: ${formatDateTime(ponto.partidaPlanejada)}` : ""}
+                          {ponto.partidaPlanejada ? `Partida planejada: ${formatDateTime(ponto.partidaPlanejada)}` : ""}
+                        </p>
+                      )}
+                      {(ponto.chegadaReal || ponto.partidaReal) && (
+                        <p className="text-sm text-foreground mt-1">
+                          {ponto.chegadaReal ? `Chegada real: ${formatDateTime(ponto.chegadaReal)}` : ""}
+                          {ponto.chegadaReal && ponto.partidaReal ? " • " : ""}
+                          {ponto.partidaReal ? `Partida real: ${formatDateTime(ponto.partidaReal)}` : ""}
                         </p>
                       )}
                     </div>
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="financeiro" className="space-y-4 min-h-0">
@@ -1134,6 +1282,91 @@ export function ViagemDetalheClient({
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={timelineRealModalOpen} onOpenChange={setTimelineRealModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[88vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Preencher realizado da timeline planejada</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label>Origem · Partida real</Label>
+                <Input
+                  type="datetime-local"
+                  value={timelineReal.origem_partida_real || ""}
+                  onChange={(event) =>
+                    setTimelineReal((prev) => ({
+                      ...prev,
+                      origem_partida_real: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Destino · Chegada real</Label>
+                <Input
+                  type="datetime-local"
+                  value={timelineReal.destino_chegada_real || ""}
+                  onChange={(event) =>
+                    setTimelineReal((prev) => ({
+                      ...prev,
+                      destino_chegada_real: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            {timelineReal.intermediarios.length > 0 && (
+              <div className="space-y-3">
+                {timelineReal.intermediarios.map((ponto, index) => (
+                  <div key={ponto.chave || `${ponto.cidade}-${index}`} className="rounded-md border border-border/60 p-3">
+                    <p className="text-xs font-medium text-foreground mb-2">
+                      {index + 1}. {ponto.cidade}/{ponto.estado}
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="grid gap-2">
+                        <Label>Chegada real</Label>
+                        <Input
+                          type="datetime-local"
+                          value={ponto.chegada_real || ""}
+                          onChange={(event) => updateTimelineRealIntermediario(index, "chegada_real", event.target.value)}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>Partida real</Label>
+                        <Input
+                          type="datetime-local"
+                          value={ponto.partida_real || ""}
+                          onChange={(event) => updateTimelineRealIntermediario(index, "partida_real", event.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setTimelineRealModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                onClick={async () => {
+                  await salvarTimelineReal()
+                  setTimelineRealModalOpen(false)
+                }}
+                disabled={loading}
+              >
+                {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                Salvar realizados e recalcular ETA
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={eventModalOpen} onOpenChange={setEventModalOpen}>
         <DialogContent>

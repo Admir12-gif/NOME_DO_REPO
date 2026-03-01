@@ -86,8 +86,16 @@ export function getPontoParadaTipoLabel(tipo?: string | null) {
 export interface PontoIntermediario {
   cidade: string
   estado: string
+  km?: number | null
   tipo_parada?: PontoParadaTipo
   observacao?: string
+}
+
+export function normalizePontoIntermediarioKm(km?: number | string | null) {
+  if (km === null || km === undefined || km === "") return null
+  const parsed = typeof km === "number" ? km : Number.parseFloat(String(km).replace(",", "."))
+  if (!Number.isFinite(parsed)) return null
+  return parsed >= 0 ? parsed : null
 }
 
 export interface ViagemPlanejamentoIntermediario {
@@ -97,11 +105,15 @@ export interface ViagemPlanejamentoIntermediario {
   tipo_parada?: PontoParadaTipo
   chegada_planejada: string | null
   partida_planejada: string | null
+  chegada_real?: string | null
+  partida_real?: string | null
 }
 
 export interface ViagemPlanejamentoRota {
   origem_partida_planejada: string | null
   destino_chegada_planejada: string | null
+  origem_partida_real?: string | null
+  destino_chegada_real?: string | null
   intermediarios: ViagemPlanejamentoIntermediario[]
 }
 
