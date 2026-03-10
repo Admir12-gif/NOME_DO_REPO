@@ -283,6 +283,7 @@ export function ViagensClient({
   const [quickVeiculoOpen, setQuickVeiculoOpen] = useState(false)
   const [quickMotoristaOpen, setQuickMotoristaOpen] = useState(false)
   const [quickRotaOpen, setQuickRotaOpen] = useState(false)
+  const [showAdvancedForm, setShowAdvancedForm] = useState(false)
 
   const [formData, setFormData] = useState<ViagemFormData>({
     cliente_id: "",
@@ -321,6 +322,7 @@ export function ViagensClient({
       planejamento_rota: null,
     })
     setSelectedViagem(null)
+    setShowAdvancedForm(false)
   }
 
   const handleAdd = () => {
@@ -779,16 +781,16 @@ export function ViagensClient({
           }
         }}
       >
-        <DialogContent className="!w-[70vw] !max-w-[70vw] h-[94vh] overflow-hidden p-0">
+        <DialogContent className="!w-[96vw] !max-w-[96vw] h-[94vh] overflow-hidden p-0">
           <div className="h-full min-h-0 flex flex-col">
-            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-5 sm:px-6 sm:py-6 bg-muted/20">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-4 sm:py-4 bg-muted/20">
               {cockpitLoading && (
                 <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
                   Carregando cockpit...
                 </div>
               )}
               {!cockpitLoading && cockpitData && (
-                <div className="mx-auto w-full max-w-[1400px]">
+                <div className="w-full">
                   <ViagemDetalheClient
                     viagem={cockpitData.viagem}
                     initialEventos={cockpitData.eventos}
@@ -820,7 +822,18 @@ export function ViagensClient({
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-              Preencha o básico primeiro (cliente, veículo, motorista e rota). O restante é opcional e pode ser complementado depois.
+              Lançamento rápido: preencha cliente, veículo, motorista, rota e datas. Eventos operacionais são registrados no cockpit (início, fim, observação).
+            </div>
+
+            <div className="flex items-center justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAdvancedForm((prev) => !prev)}
+              >
+                {showAdvancedForm ? "Ocultar campos avançados" : "Mostrar campos avançados"}
+              </Button>
             </div>
 
             {/* Cliente + Status */}
@@ -945,7 +958,7 @@ export function ViagensClient({
               </Select>
             </div>
 
-            {formData.rota_id && formData.planejamento_rota && (
+            {showAdvancedForm && formData.rota_id && formData.planejamento_rota && (
               <div className="space-y-4 rounded-lg border border-border/70 bg-muted/20 p-4">
                 <div>
                   <p className="text-sm font-medium text-foreground">Planejamento da rota</p>
@@ -1036,53 +1049,55 @@ export function ViagensClient({
               </div>
             </div>
 
-            <div className="space-y-4 rounded-lg border border-border/70 p-4">
-              <div>
-                <p className="text-sm font-medium text-foreground">Dados complementares</p>
-                <p className="text-xs text-muted-foreground">Opcional no cadastro inicial. Preencha agora se já tiver os dados.</p>
-              </div>
+            {showAdvancedForm && (
+              <div className="space-y-4 rounded-lg border border-border/70 p-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Dados complementares</p>
+                  <p className="text-xs text-muted-foreground">Opcional no cadastro inicial. Preencha agora se já tiver os dados.</p>
+                </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Tipo de Carga</Label>
-                  <Input
-                    value={formData.tipo_carga}
-                    onChange={(e) => setFormData({ ...formData, tipo_carga: e.target.value })}
-                    placeholder="Ex: grãos, combustível, refrigerado"
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Tipo de Carga</Label>
+                    <Input
+                      value={formData.tipo_carga}
+                      onChange={(e) => setFormData({ ...formData, tipo_carga: e.target.value })}
+                      placeholder="Ex: grãos, combustível, refrigerado"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Valor do Frete (R$)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={formData.valor_frete}
+                      onChange={(e) => setFormData({ ...formData, valor_frete: e.target.value })}
+                      placeholder="0,00"
+                    />
+                  </div>
                 </div>
-                <div className="grid gap-2">
-                  <Label>Valor do Frete (R$)</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={formData.valor_frete}
-                    onChange={(e) => setFormData({ ...formData, valor_frete: e.target.value })}
-                    placeholder="0,00"
-                  />
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Volume (ton)</Label>
-                  <Input
-                    type="number"
-                    step="0.001"
-                    value={formData.volume_toneladas}
-                    onChange={(e) => setFormData({ ...formData, volume_toneladas: e.target.value })}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>KM</Label>
-                  <Input
-                    type="number"
-                    value={formData.km_real}
-                    onChange={(e) => setFormData({ ...formData, km_real: e.target.value })}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Volume (ton)</Label>
+                    <Input
+                      type="number"
+                      step="0.001"
+                      value={formData.volume_toneladas}
+                      onChange={(e) => setFormData({ ...formData, volume_toneladas: e.target.value })}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>KM</Label>
+                    <Input
+                      type="number"
+                      value={formData.km_real}
+                      onChange={(e) => setFormData({ ...formData, km_real: e.target.value })}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             <div className="flex justify-end gap-3 pt-4">
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>

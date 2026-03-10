@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import {
   ArrowLeft,
@@ -18,6 +18,7 @@ import {
 import { createClient } from "@/lib/supabase/client"
 import { calculateEta, deriveEtaStopsFromIntermediarios } from "@/lib/eta"
 import type {
+  PostoAbastecimento,
   CustoViagem,
   DocumentoViagemTipo,
   EtaParametro,
@@ -67,9 +68,8 @@ type EventFormState = {
   titulo: string
   local: string
   observacao: string
-  impacto_minutos: string
-  previsto_em: string
-  comprovante_url: string
+  inicio_em: string
+  fim_em: string
 }
 
 type CostFormState = {
@@ -92,22 +92,31 @@ type DocumentoFormState = {
   observacao: string
 }
 
-const eventQuickActions: { label: string; type: EventoViagemTipo }[] = [
-  { label: "+ Chegada/Saída", type: "chegada" },
-  { label: "+ Abastecimento", type: "abastecimento" },
-  { label: "+ Ocorrência", type: "ocorrencia" },
-  { label: "+ Pedágio", type: "pedagio" },
-  { label: "+ Parada/Espera", type: "parada" },
+type CockpitQuickAction = {
+  label: string
+  type: EventoViagemTipo
+  status: EventoViagemStatus
+  title: string
+}
+
+type MarcoOperacionalTipo = "saida" | "chegada" | "passagem"
+const PASSAGEM_OUTRO_PONTO_VALUE = "__outro_ponto__"
+
+const cockpitQuickActions: CockpitQuickAction[] = [
+  { label: "Chegada", type: "chegada", status: "concluido", title: "Chegada" },
+  { label: "Saída", type: "saida", status: "concluido", title: "Saída" },
+  { label: "Iniciar Carreg.", type: "parada", status: "em_andamento", title: "Início de carregamento" },
+  { label: "Finalizar Carreg.", type: "parada", status: "concluido", title: "Fim de carregamento" },
+  { label: "Iniciar Descanso", type: "parada", status: "em_andamento", title: "Início de descanso" },
+  { label: "Finalizar Descanso", type: "parada", status: "concluido", title: "Fim de descanso" },
+  { label: "Abastecimento", type: "abastecimento", status: "concluido", title: "Abastecimento" },
+  { label: "Manutenção", type: "parada", status: "pendente", title: "Manutenção" },
+  { label: "Documentação", type: "ocorrencia", status: "pendente", title: "Documentação" },
+  { label: "Ocorrência", type: "ocorrencia", status: "pendente", title: "Ocorrência" },
 ]
 
-const eventQuickActionsCompactLabel: Record<EventoViagemTipo, string> = {
-  chegada: "Chegada",
-  saida: "Saída",
-  abastecimento: "Abastecer",
-  ocorrencia: "Ocorrência",
-  pedagio: "Pedágio",
-  parada: "Parada",
-  espera: "Espera",
+function findQuickActionByTitle(title: string) {
+  return cockpitQuickActions.find((action) => action.title === title)
 }
 
 const eventTypeLabels: Record<EventoViagemTipo, string> = {
@@ -125,6 +134,12 @@ const eventStatusLabel: Record<EventoViagemStatus, string> = {
   em_andamento: "🟡 Em andamento",
   pendente: "⚪ Pendente",
   atrasado: "🔴 Atrasado",
+}
+
+const marcoOperacionalConfig: Record<MarcoOperacionalTipo, { tipo: EventoViagemTipo; titulo: string; label: string }> = {
+  saida: { tipo: "saida", titulo: "Saída", label: "Saída" },
+  chegada: { tipo: "chegada", titulo: "Chegada", label: "Chegada" },
+  passagem: { tipo: "parada", titulo: "Passagem", label: "Passagem" },
 }
 
 const documentoGrupos: { label: string; tipos: DocumentoViagemTipo[] }[] = [
@@ -156,6 +171,25 @@ function formatFileSize(bytes?: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatDurationByUnit(totalMinutes: number) {
+  const minutes = Math.max(0, Math.round(Number(totalMinutes) || 0))
+  if (minutes <= 0) return "-"
+
+  if (minutes >= 1440) {
+    const days = minutes / 1440
+    const value = Number.isInteger(days) ? days.toString() : days.toFixed(1).replace(".0", "")
+    return `${value} dia${Number(value) > 1 ? "s" : ""}`
+  }
+
+  if (minutes >= 60) {
+    const hours = minutes / 60
+    const value = Number.isInteger(hours) ? hours.toString() : hours.toFixed(1).replace(".0", "")
+    return `${value} h`
+  }
+
+  return `${minutes} min`
 }
 
 function toDatetimeLocal(value?: string | null) {
@@ -199,6 +233,44 @@ function buildIntermediarioChave(cidade?: string | null, estado?: string | null,
   return `${index}:${cidadeNormalizada}:${estadoNormalizado}`
 }
 
+function getLocalEventosStorageKey(viagemId: string) {
+  return `tms:viagem_eventos:${viagemId}`
+}
+
+function readLocalEventos(viagemId: string) {
+  if (typeof window === "undefined") return [] as ViagemEvento[]
+
+  try {
+    const raw = window.localStorage.getItem(getLocalEventosStorageKey(viagemId))
+    if (!raw) return [] as ViagemEvento[]
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as ViagemEvento[]) : ([] as ViagemEvento[])
+  } catch {
+    return [] as ViagemEvento[]
+  }
+}
+
+function writeLocalEventos(viagemId: string, eventos: ViagemEvento[]) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(getLocalEventosStorageKey(viagemId), JSON.stringify(eventos))
+}
+
+function isMissingViagemEventosTableError(errorMessage: string, errorCode?: string) {
+  return (
+    errorCode === "PGRST205" ||
+    errorMessage.toLowerCase().includes("viagem_eventos") ||
+    errorMessage.toLowerCase().includes("schema cache")
+  )
+}
+
+function createLocalEventId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `local-${crypto.randomUUID()}`
+  }
+
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 export function ViagemDetalheClient({
   viagem,
   initialEventos,
@@ -216,6 +288,7 @@ export function ViagemDetalheClient({
   const [documentos, setDocumentos] = useState(initialDocumentos)
   const [viagemState, setViagemState] = useState(viagem)
   const [loading, setLoading] = useState(false)
+  const [usingLocalEventosFallback, setUsingLocalEventosFallback] = useState(false)
 
   const [eventModalOpen, setEventModalOpen] = useState(false)
   const [activeTimelineEvent, setActiveTimelineEvent] = useState<ViagemEvento | null>(null)
@@ -224,6 +297,10 @@ export function ViagemDetalheClient({
   const [costModalOpen, setCostModalOpen] = useState(false)
   const [receitaModalOpen, setReceitaModalOpen] = useState(false)
   const [docModalOpen, setDocModalOpen] = useState(false)
+  const [saldoInicialLitros, setSaldoInicialLitros] = useState("300")
+  const [consumoMedioEditavel, setConsumoMedioEditavel] = useState(() => Number(viagem.veiculo?.meta_consumo || 2.4))
+  const [timeTicker, setTimeTicker] = useState(() => Date.now())
+  const recalculateEtaInFlightRef = useRef(false)
 
   const [eventForm, setEventForm] = useState<EventFormState>({
     tipo_evento: "chegada",
@@ -231,9 +308,21 @@ export function ViagemDetalheClient({
     titulo: "",
     local: "",
     observacao: "",
-    impacto_minutos: "0",
-    previsto_em: "",
-    comprovante_url: "",
+    inicio_em: "",
+    fim_em: "",
+  })
+  const [passagemPontoSelecionado, setPassagemPontoSelecionado] = useState("")
+  const [novoPontoPassagem, setNovoPontoPassagem] = useState("")
+  const [postosAbastecimento, setPostosAbastecimento] = useState<PostoAbastecimento[]>([])
+  const [abastecimentoForm, setAbastecimentoForm] = useState({
+    veiculo_id: viagem.veiculo_id || "",
+    posto_id: "",
+    hodometro: "",
+    litros: "",
+    valor_total: "",
+    posto: "",
+    arla: "nao",
+    arla_valor: "",
   })
 
   const [costForm, setCostForm] = useState<CostFormState>({
@@ -281,6 +370,39 @@ export function ViagemDetalheClient({
       })),
     })
   }, [viagemState.planejamento_rota])
+
+  useEffect(() => {
+    if (initialEventos.length > 0) return
+
+    const localEventos = readLocalEventos(viagem.id)
+    if (localEventos.length > 0) {
+      setEventos(localEventos)
+      setUsingLocalEventosFallback(true)
+    }
+  }, [initialEventos.length, viagem.id])
+
+  useEffect(() => {
+    const loadPostos = async () => {
+      const { data } = await supabase
+        .from("postos_abastecimento")
+        .select("id, user_id, nome, localidade, referencia, created_at, updated_at")
+        .order("nome")
+
+      if (data) {
+        setPostosAbastecimento(data as PostoAbastecimento[])
+      }
+    }
+
+    void loadPostos()
+  }, [])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setTimeTicker(Date.now())
+    }, 60_000)
+
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   const eventosOrdenados = useMemo(
     () => [...eventos].sort((a, b) => new Date(b.ocorrido_em).getTime() - new Date(a.ocorrido_em).getTime()),
@@ -347,11 +469,11 @@ export function ViagemDetalheClient({
   const realHours = useMemo(() => {
     if (!viagemState.data_inicio) return null
     const finalDate = viagemState.status === "Concluida" || viagemState.status === "Concluída"
-      ? (viagemState.data_fim || new Date().toISOString())
-      : new Date().toISOString()
+      ? (viagemState.data_fim || new Date(timeTicker).toISOString())
+      : new Date(timeTicker).toISOString()
 
     return (new Date(finalDate).getTime() - new Date(viagemState.data_inicio).getTime()) / 3600000
-  }, [viagemState.data_fim, viagemState.data_inicio, viagemState.status])
+  }, [timeTicker, viagemState.data_fim, viagemState.data_inicio, viagemState.status])
 
   const statusNormalizado = normalizeViagemStatus(viagemState.status)
 
@@ -365,13 +487,13 @@ export function ViagemDetalheClient({
   const ultimoMarco = eventosOrdenados[0] || null
 
   const proximoMarcoPrevisto = useMemo(() => {
-    const agora = Date.now()
+    const agora = timeTicker
     return eventos
       .filter((evento) => !!evento.previsto_em)
       .map((evento) => ({ ...evento, previstoTs: new Date(evento.previsto_em as string).getTime() }))
       .filter((evento) => evento.previstoTs >= agora)
       .sort((a, b) => a.previstoTs - b.previstoTs)[0] || null
-  }, [eventos])
+  }, [eventos, timeTicker])
 
   const kmPlanejado = Number(viagemState.rota?.km_planejado || 0)
   const kmReal = Number(viagemState.km_real || 0)
@@ -619,9 +741,9 @@ export function ViagemDetalheClient({
 
   const tempoRestanteHoras = useMemo(() => {
     if (!viagemState.eta_destino_em) return null
-    const diffMs = new Date(viagemState.eta_destino_em).getTime() - Date.now()
+    const diffMs = new Date(viagemState.eta_destino_em).getTime() - timeTicker
     return diffMs > 0 ? diffMs / 3600000 : 0
-  }, [viagemState.eta_destino_em])
+  }, [timeTicker, viagemState.eta_destino_em])
 
   const consumoMedioOperacao = useMemo(() => {
     if (abastecimentosResumo.litros <= 0) return 0
@@ -656,6 +778,54 @@ export function ViagemDetalheClient({
   const clienteNome = viagemState.cliente?.nome || "Sem cliente"
   const cicloLabel = viagemState.rota?.nome || `C-${viagemState.id.slice(0, 4).toUpperCase()}`
   const viagemLabel = `V-${viagemState.id.slice(0, 6).toUpperCase()}`
+  const origemOperacionalLabel =
+    viagemState.origem_real ||
+    [viagemState.rota?.origem_cidade, viagemState.rota?.origem_estado].filter(Boolean).join("/") ||
+    "Origem"
+  const destinoOperacionalLabel =
+    viagemState.destino_real ||
+    [viagemState.rota?.destino_cidade, viagemState.rota?.destino_estado].filter(Boolean).join("/") ||
+    "Destino"
+
+  const pontosIntermediariosRotaOptions = useMemo(() => {
+    const fromRota = (viagemState.rota?.pontos_intermediarios || [])
+      .map((ponto) => {
+        const cidade = (ponto?.cidade || "").trim()
+        const estado = (ponto?.estado || "").trim()
+        if (!cidade || !estado) return null
+        return `${cidade}/${estado}`
+      })
+      .filter(Boolean) as string[]
+
+    const fromPlanejamento = (viagemState.planejamento_rota?.intermediarios || [])
+      .map((ponto) => {
+        const cidade = (ponto?.cidade || "").trim()
+        const estado = (ponto?.estado || "").trim()
+        if (!cidade || !estado) return null
+        return `${cidade}/${estado}`
+      })
+      .filter(Boolean) as string[]
+
+    return Array.from(new Set([...fromRota, ...fromPlanejamento]))
+  }, [viagemState.planejamento_rota?.intermediarios, viagemState.rota?.pontos_intermediarios])
+
+  const pontosPassagemExtrasViagem = useMemo(() => {
+    const extras = eventos
+      .filter((evento) => evento.titulo === "Passagem")
+      .filter((evento) => {
+        const payload = (evento.payload || {}) as Record<string, unknown>
+        return payload.passagem_ponto_origem === "viagem"
+      })
+      .map((evento) => (evento.local || "").trim())
+      .filter(Boolean)
+
+    return Array.from(new Set(extras))
+  }, [eventos])
+
+  const pontosPassagemOptions = useMemo(
+    () => Array.from(new Set([...pontosIntermediariosRotaOptions, ...pontosPassagemExtrasViagem])),
+    [pontosIntermediariosRotaOptions, pontosPassagemExtrasViagem],
+  )
 
   const proximaAcaoTitulo = proximoMarcoPrevisto
     ? `${eventTypeLabels[proximoMarcoPrevisto.tipo_evento]} — ${proximoMarcoPrevisto.local || "Ponto operacional"}`
@@ -670,14 +840,180 @@ export function ViagemDetalheClient({
     viagemState.eta_destino_em ||
     null
 
+  const chegadaPlanejadaDestino =
+    viagemState.planejamento_rota?.destino_chegada_planejada ||
+    viagemState.data_fim ||
+    null
+
+  const previsaoChegadaDestino = viagemState.eta_destino_em || chegadaPlanejadaDestino
+
+  const eventosCockpit = useMemo(() => {
+    const toTipo = (evento: ViagemEvento) => {
+      if (evento.titulo?.trim()) return evento.titulo
+      return eventTypeLabels[evento.tipo_evento] || evento.tipo_evento
+    }
+
+    const toStatus = (evento: ViagemEvento) => {
+      if (evento.status_evento === "concluido") return "Concluído"
+      if (evento.status_evento === "em_andamento") return "Em andamento"
+      if (evento.status_evento === "atrasado") return "Atrasado"
+      return "Pendente"
+    }
+
+    return eventosOrdenados.map((evento, index) => ({
+      id: evento.id,
+      ordem: index + 1,
+      tipo: toTipo(evento),
+      local: evento.local || "-",
+      inicio: formatDateTime(evento.ocorrido_em),
+      fim: formatDateTime(evento.previsto_em),
+      duracao: formatDurationByUnit(Number(evento.impacto_minutos || 0)),
+      status: toStatus(evento),
+      source: evento,
+    }))
+  }, [eventosOrdenados])
+
+  const tempoCarregamentoPlanejadoMin = useMemo(
+    () =>
+      eventos.reduce((sum, evento) => {
+        const titulo = (evento.titulo || "").toLowerCase()
+        if (!titulo.includes("carreg")) return sum
+        return sum + Math.max(0, Number(evento.impacto_minutos || 0))
+      }, 0),
+    [eventos],
+  )
+
+  const tempoCarregamentoRealMin = useMemo(() => {
+    return eventos.reduce((sum, evento) => {
+      const titulo = (evento.titulo || "").toLowerCase()
+      if (!titulo.includes("carreg")) return sum
+      if (evento.status_evento === "em_andamento") {
+        const minutosAteAgora = Math.max(0, Math.round((timeTicker - new Date(evento.ocorrido_em).getTime()) / 60000))
+        return sum + minutosAteAgora
+      }
+      return sum + Math.max(0, Number(evento.impacto_minutos || 0))
+    }, 0)
+  }, [eventos, timeTicker])
+
+  const tempoTotalParadoMin = useMemo(() => {
+    return eventos.reduce((sum, evento) => {
+      const titulo = (evento.titulo || "").toLowerCase()
+      const contaComoParado =
+        ["parada", "espera", "ocorrencia"].includes(evento.tipo_evento) ||
+        titulo.includes("fila") ||
+        titulo.includes("descans")
+
+      if (!contaComoParado) return sum
+
+      if (evento.status_evento === "em_andamento") {
+        const minutosAteAgora = Math.max(0, Math.round((timeTicker - new Date(evento.ocorrido_em).getTime()) / 60000))
+        return sum + minutosAteAgora
+      }
+
+      return sum + Math.max(0, Number(evento.impacto_minutos || 0))
+    }, 0)
+  }, [eventos, timeTicker])
+
+  const consumoEstimadoLitros = useMemo(() => {
+    if (kmPlanejado <= 0 || consumoMedioEditavel <= 0) return null
+    return kmPlanejado / consumoMedioEditavel
+  }, [consumoMedioEditavel, kmPlanejado])
+
+  const saldoAtualEstimadoLitros = useMemo(() => {
+    const saldoInicial = Number(saldoInicialLitros)
+    if (!Number.isFinite(saldoInicial)) return null
+    if (consumoEstimadoLitros === null) return null
+    return saldoInicial + abastecimentosResumo.litros - consumoEstimadoLitros
+  }, [abastecimentosResumo.litros, consumoEstimadoLitros, saldoInicialLitros])
+
+  const pendenciasCockpit = useMemo(() => {
+    const itens: string[] = []
+
+    const possuiSaidaOrigem = eventos.some((evento) => evento.tipo_evento === "saida")
+    const possuiChegadaDestino = eventos.some((evento) => evento.tipo_evento === "chegada")
+
+    if (statusNormalizado !== "Planejada" && !possuiSaidaOrigem) {
+      itens.push("Saída da origem ainda não registrada.")
+    }
+
+    if (statusNormalizado === "Em andamento" && !possuiChegadaDestino) {
+      itens.push("Chegada ao destino pendente de registro.")
+    }
+
+    if ((viagemState.atraso_estimado_minutos || 0) > 0) {
+      itens.push(`Atraso estimado de ${formatDurationByUnit(Number(viagemState.atraso_estimado_minutos || 0))}.`)
+    }
+
+    if (tempoTotalParadoMin >= 120) {
+      itens.push(`Tempo parado elevado no ciclo: ${formatDurationByUnit(tempoTotalParadoMin)}.`)
+    }
+
+    if (saldoAtualEstimadoLitros !== null && saldoAtualEstimadoLitros < 0) {
+      itens.push("Saldo de diesel estimado insuficiente para concluir o ciclo.")
+    }
+
+    if (itens.length === 0) {
+      itens.push("Operação sem pendências críticas no momento.")
+    }
+
+    return itens.slice(0, 4)
+  }, [
+    eventos,
+    saldoAtualEstimadoLitros,
+    statusNormalizado,
+    tempoTotalParadoMin,
+    viagemState.atraso_estimado_minutos,
+  ])
+
+  const smartQuickActions = useMemo(() => {
+    const carregamentoEmAndamento = eventosOrdenados.some(
+      (evento) => evento.status_evento === "em_andamento" && evento.titulo === "Início de carregamento",
+    )
+    const descansoEmAndamento = eventosOrdenados.some(
+      (evento) => evento.status_evento === "em_andamento" && evento.titulo === "Início de descanso",
+    )
+
+    return [
+      {
+        label: "Partida/Chegada",
+        action: {
+          label: "Partida/Chegada",
+          type: "saida",
+          status: "concluido",
+          title: "Partida e chegada",
+        } as CockpitQuickAction,
+      },
+      {
+        label: carregamentoEmAndamento ? "Finalizar Carreg." : "Iniciar Carreg.",
+        action: findQuickActionByTitle(carregamentoEmAndamento ? "Fim de carregamento" : "Início de carregamento"),
+      },
+      {
+        label: descansoEmAndamento ? "Finalizar Descanso" : "Iniciar Descanso",
+        action: findQuickActionByTitle(descansoEmAndamento ? "Fim de descanso" : "Início de descanso"),
+      },
+      { label: "Abastecimento", action: findQuickActionByTitle("Abastecimento") },
+      { label: "Manutenção", action: findQuickActionByTitle("Manutenção") },
+      { label: "Documentação", action: findQuickActionByTitle("Documentação") },
+      { label: "Ocorrência", action: findQuickActionByTitle("Ocorrência") },
+    ].filter((item): item is { label: string; action: CockpitQuickAction } => Boolean(item.action))
+  }, [eventosOrdenados])
+
   const paradasPrevistasPorRota = useMemo(
     () => deriveEtaStopsFromIntermediarios(viagemState.rota?.pontos_intermediarios),
     [viagemState.rota?.pontos_intermediarios],
   )
 
   const recalculateEta = async (override?: { km?: number; velocidade?: number }) => {
+    if (recalculateEtaInFlightRef.current) return
+    recalculateEtaInFlightRef.current = true
+
+    try {
     const km = override?.km ?? kmRestanteAutomatico
     const velocidade = override?.velocidade
+    const etaPlanejadaDestino =
+      viagemState.planejamento_rota?.destino_chegada_planejada ||
+      viagemState.data_fim ||
+      null
 
     const result = calculateEta({
       viagem: {
@@ -692,7 +1028,8 @@ export function ViagemDetalheClient({
       eventos,
       parametros: etaParametros,
       kmRestante: km,
-      etaPlanejado: viagemState.data_fim,
+      tempoPerdidoMin: tempoTotalParadoMin,
+      etaPlanejado: etaPlanejadaDestino,
       paradasPrevistas: paradasPrevistasPorRota,
     })
 
@@ -720,6 +1057,19 @@ export function ViagemDetalheClient({
       km_restante: km,
     }
 
+    const etaAtualTs = viagemState.eta_destino_em ? new Date(viagemState.eta_destino_em).getTime() : null
+    const etaNovoTs = new Date(payload.eta_destino_em).getTime()
+    const shouldPersist =
+      etaAtualTs === null ||
+      Math.abs(etaNovoTs - etaAtualTs) >= 60_000 ||
+      Math.abs(Number(viagemState.atraso_estimado_minutos || 0) - Number(payload.atraso_estimado_minutos || 0)) >= 1 ||
+      Math.abs(Number(viagemState.velocidade_media_kmh || 0) - Number(payload.velocidade_media_kmh || 0)) >= 0.1 ||
+      Number(viagemState.km_restante || 0) !== Number(payload.km_restante || 0)
+
+    if (!shouldPersist) {
+      return
+    }
+
     const { error } = await supabase
       .from("viagens")
       .update(payload)
@@ -728,7 +1078,37 @@ export function ViagemDetalheClient({
     if (!error) {
       setViagemState((prev) => ({ ...prev, ...payload }))
     }
+    } finally {
+      recalculateEtaInFlightRef.current = false
+    }
   }
+
+  useEffect(() => {
+    if (statusNormalizado !== "Em andamento") return
+
+    const runAutoEta = () => {
+      void recalculateEta()
+    }
+
+    runAutoEta()
+    const intervalId = window.setInterval(runAutoEta, 60_000)
+
+    return () => window.clearInterval(intervalId)
+  }, [
+    statusNormalizado,
+    kmRestanteAutomatico,
+    tempoTotalParadoMin,
+    viagemState.carregado,
+    viagemState.data_inicio,
+    viagemState.data_fim,
+    viagemState.rota_id,
+    viagemState.motorista_id,
+    viagemState.veiculo_id,
+    viagemState.velocidade_media_kmh,
+    viagemState.planejamento_rota?.destino_chegada_planejada,
+    paradasPrevistasPorRota,
+    etaParametros,
+  ])
 
   const updateTimelineRealIntermediario = (
     index: number,
@@ -808,17 +1188,261 @@ export function ViagemDetalheClient({
 
   const openNewEventModal = (type: EventoViagemTipo) => {
     setActiveTimelineEvent(null)
+    const nowLocal = toDatetimeLocal(new Date().toISOString())
     setEventForm({
       tipo_evento: type,
       status_evento: "concluido",
       titulo: eventTypeLabels[type],
       local: "",
       observacao: "",
-      impacto_minutos: "0",
-      previsto_em: "",
-      comprovante_url: "",
+      inicio_em: nowLocal,
+      fim_em: nowLocal,
     })
     setEventModalOpen(true)
+  }
+
+  const refreshEventos = async () => {
+    const { data, error } = await supabase
+      .from("viagem_eventos")
+      .select("*")
+      .eq("viagem_id", viagemState.id)
+      .order("ocorrido_em", { ascending: false })
+
+    if (!error && data) {
+      setEventos(data as ViagemEvento[])
+      setUsingLocalEventosFallback(false)
+      return
+    }
+
+    if (error && isMissingViagemEventosTableError(error.message, error.code)) {
+      const localEventos = readLocalEventos(viagemState.id)
+      setEventos(localEventos)
+      setUsingLocalEventosFallback(true)
+    }
+  }
+
+  const getEventoSaveErrorMessage = (errorMessage: string, errorCode?: string) => {
+    const missingTable = isMissingViagemEventosTableError(errorMessage, errorCode)
+
+    if (missingTable) {
+      return "Tabela 'viagem_eventos' não encontrada no Supabase. Execute o script scripts/004_cockpit_viagem_eta_docs.sql no SQL Editor do projeto."
+    }
+
+    return errorMessage
+  }
+
+  const handleQuickActionRegister = (action: CockpitQuickAction) => {
+    const nowLocal = toDatetimeLocal(new Date().toISOString())
+    const localPadrao =
+      ultimoMarco?.local ||
+      viagemState.destino_real ||
+      viagemState.origem_real ||
+      "A DEFINIR"
+    const isPartidaChegadaAction = action.title === "Partida e chegada"
+
+    setActiveTimelineEvent(null)
+    setEventForm({
+      tipo_evento: isPartidaChegadaAction ? "saida" : action.type,
+      status_evento: "concluido",
+      titulo: isPartidaChegadaAction ? "Saída" : action.title,
+      local: isPartidaChegadaAction ? origemOperacionalLabel : localPadrao,
+      observacao: "Registrado por ação rápida.",
+      inicio_em: nowLocal,
+      fim_em: nowLocal,
+    })
+    if (action.type === "abastecimento") {
+      setAbastecimentoForm({
+        veiculo_id: viagemState.veiculo_id || "",
+        posto_id: "",
+        hodometro: "",
+        litros: "",
+        valor_total: "",
+        posto: localPadrao,
+        arla: "nao",
+        arla_valor: "",
+      })
+    }
+    setPassagemPontoSelecionado("")
+    setNovoPontoPassagem("")
+    setEventModalOpen(true)
+  }
+
+  const quickActionPartidaChegadaAtiva = ["Saída", "Chegada", "Passagem"].includes(eventForm.titulo)
+
+  const selectedMarcoOperacional = useMemo<MarcoOperacionalTipo>(() => {
+    if (eventForm.titulo === "Chegada") return "chegada"
+    if (eventForm.titulo === "Passagem") return "passagem"
+    return "saida"
+  }, [eventForm.titulo])
+
+  const isPassagemSelecionada = quickActionPartidaChegadaAtiva && selectedMarcoOperacional === "passagem"
+  const isAbastecimentoSelecionado = eventForm.tipo_evento === "abastecimento" || eventForm.titulo === "Abastecimento"
+
+  const handleChangeMarcoOperacional = (value: MarcoOperacionalTipo) => {
+    const config = marcoOperacionalConfig[value]
+    const localMarco = value === "saida" ? origemOperacionalLabel : value === "chegada" ? destinoOperacionalLabel : ""
+    const passagemDefault = pontosPassagemOptions[0] || PASSAGEM_OUTRO_PONTO_VALUE
+
+    if (value === "passagem") {
+      setPassagemPontoSelecionado(passagemDefault)
+      setNovoPontoPassagem("")
+    } else {
+      setPassagemPontoSelecionado("")
+      setNovoPontoPassagem("")
+    }
+
+    setEventForm((prev) => ({
+      ...prev,
+      tipo_evento: config.tipo,
+      titulo: config.titulo,
+      local:
+        value === "passagem"
+          ? (passagemDefault === PASSAGEM_OUTRO_PONTO_VALUE ? "" : passagemDefault)
+          : (localMarco || prev.local),
+      fim_em: "",
+    }))
+  }
+
+  const getAbastecimentoPayloadData = (payload: Record<string, unknown> | null | undefined) => {
+    if (!payload) {
+      return {
+        posto_id: "",
+        hodometro: "",
+        litros: "",
+        valor_total: "",
+        posto: "",
+        arla: "nao",
+        arla_valor: "",
+      }
+    }
+
+    return {
+      posto_id: String(payload.posto_id || ""),
+      hodometro: payload.hodometro !== undefined && payload.hodometro !== null ? String(payload.hodometro) : "",
+      litros: payload.litros !== undefined && payload.litros !== null ? String(payload.litros) : "",
+      valor_total: payload.valor_total !== undefined && payload.valor_total !== null ? String(payload.valor_total) : "",
+      posto: String(payload.posto || ""),
+      arla: payload.arla === "sim" ? "sim" : "nao",
+      arla_valor: payload.arla_valor !== undefined && payload.arla_valor !== null ? String(payload.arla_valor) : "",
+    }
+  }
+
+  const upsertAbastecimentoRegistro = async (params: {
+    userId: string
+    eventPayload: Record<string, unknown>
+    existingAbastecimentoId?: string | null
+    inicioIso: string
+  }) => {
+    const postoNome =
+      String(params.eventPayload.posto || "") ||
+      postosAbastecimento.find((item) => item.id === String(params.eventPayload.posto_id || ""))?.nome ||
+      null
+
+    const abastecimentoData = {
+      user_id: params.userId,
+      veiculo_id: String(params.eventPayload.veiculo_id || viagemState.veiculo_id || ""),
+      viagem_id: viagemState.id,
+      posto_id: String(params.eventPayload.posto_id || "") || null,
+      data: params.inicioIso,
+      hodometro: Number(params.eventPayload.hodometro || 0),
+      litros: Number(params.eventPayload.litros || 0),
+      valor_total: Number(params.eventPayload.valor_total || 0),
+      posto: postoNome,
+      observacao: eventForm.observacao || null,
+    }
+
+    if (!abastecimentoData.veiculo_id) return null
+
+    if (params.existingAbastecimentoId) {
+      const { data, error } = await supabase
+        .from("abastecimentos")
+        .update(abastecimentoData)
+        .eq("id", params.existingAbastecimentoId)
+        .select("id")
+        .single()
+
+      if (!error && data) return data.id as string
+    }
+
+    const { data, error } = await supabase
+      .from("abastecimentos")
+      .insert(abastecimentoData)
+      .select("id")
+      .single()
+
+    if (!error && data) return data.id as string
+    return null
+  }
+
+  const handleSelectPassagemPonto = (value: string) => {
+    setPassagemPontoSelecionado(value)
+    if (value === PASSAGEM_OUTRO_PONTO_VALUE) {
+      setEventForm((prev) => ({ ...prev, local: "" }))
+      return
+    }
+
+    setNovoPontoPassagem("")
+    setEventForm((prev) => ({ ...prev, local: value }))
+  }
+
+  useEffect(() => {
+    if (!eventModalOpen || !isPassagemSelecionada) return
+
+    const localAtual = (eventForm.local || "").trim()
+    if (!localAtual) {
+      const fallback = pontosPassagemOptions[0] || PASSAGEM_OUTRO_PONTO_VALUE
+      setPassagemPontoSelecionado(fallback)
+      return
+    }
+
+    if (pontosPassagemOptions.includes(localAtual)) {
+      setPassagemPontoSelecionado(localAtual)
+      setNovoPontoPassagem("")
+      return
+    }
+
+    setPassagemPontoSelecionado(PASSAGEM_OUTRO_PONTO_VALUE)
+    setNovoPontoPassagem(localAtual)
+  }, [eventModalOpen, isPassagemSelecionada, eventForm.local, pontosPassagemOptions])
+
+  const syncPlanejamentoRealByMarco = async (marco: MarcoOperacionalTipo, ocorridoIso: string) => {
+    if (marco !== "saida" && marco !== "chegada") return
+
+    const planejamentoAtual = viagemState.planejamento_rota || {
+      origem_partida_planejada: null,
+      destino_chegada_planejada: null,
+      intermediarios: [],
+    }
+
+    const planejamentoAtualizado = {
+      ...planejamentoAtual,
+      origem_partida_real: marco === "saida" ? ocorridoIso : planejamentoAtual.origem_partida_real || null,
+      destino_chegada_real: marco === "chegada" ? ocorridoIso : planejamentoAtual.destino_chegada_real || null,
+    }
+
+    const { error } = await supabase
+      .from("viagens")
+      .update({ planejamento_rota: planejamentoAtualizado })
+      .eq("id", viagemState.id)
+
+    if (!error) {
+      setViagemState((prev) => ({
+        ...prev,
+        planejamento_rota: planejamentoAtualizado,
+      }))
+
+      setTimelineReal((prev) => ({
+        ...prev,
+        origem_partida_real:
+          marco === "saida"
+            ? toDatetimeLocal(ocorridoIso)
+            : prev.origem_partida_real,
+        destino_chegada_real:
+          marco === "chegada"
+            ? toDatetimeLocal(ocorridoIso)
+            : prev.destino_chegada_real,
+      }))
+    }
   }
 
   const handleSaveEvent = async () => {
@@ -826,59 +1450,293 @@ export function ViagemDetalheClient({
     setLoading(true)
 
     const { data: authData } = await supabase.auth.getUser()
-    const user = authData.user
-    if (!user) {
+    const userId = authData.user?.id || viagemState.user_id
+    if (!userId) {
+      alert("Não foi possível identificar o usuário para salvar o evento.")
       setLoading(false)
       return
     }
+
+    const inicioIso = eventForm.inicio_em ? new Date(eventForm.inicio_em).toISOString() : new Date().toISOString()
+    const eventoPontual = quickActionPartidaChegadaAtiva
+    const marcoAtual: MarcoOperacionalTipo =
+      eventForm.titulo === "Chegada"
+        ? "chegada"
+        : eventForm.titulo === "Passagem"
+          ? "passagem"
+          : "saida"
+    const localPassagem =
+      passagemPontoSelecionado === PASSAGEM_OUTRO_PONTO_VALUE
+        ? novoPontoPassagem.trim()
+        : passagemPontoSelecionado || eventForm.local || ""
+
+    if (marcoAtual === "passagem" && !localPassagem.trim()) {
+      alert("Selecione um ponto de passagem ou informe um novo ponto.")
+      setLoading(false)
+      return
+    }
+
+    if (isAbastecimentoSelecionado) {
+      if (!abastecimentoForm.veiculo_id || !abastecimentoForm.hodometro || !abastecimentoForm.litros || !abastecimentoForm.valor_total) {
+        alert("Para abastecimento, preencha veículo, hodômetro, litros e valor total.")
+        setLoading(false)
+        return
+      }
+
+      if (abastecimentoForm.arla === "sim" && !abastecimentoForm.arla_valor) {
+        alert("Informe o valor de ARLA quando selecionado como SIM.")
+        setLoading(false)
+        return
+      }
+    }
+
+    const localEvento =
+      quickActionPartidaChegadaAtiva && marcoAtual === "saida"
+        ? origemOperacionalLabel
+        : quickActionPartidaChegadaAtiva && marcoAtual === "chegada"
+          ? destinoOperacionalLabel
+          : quickActionPartidaChegadaAtiva && marcoAtual === "passagem"
+            ? localPassagem
+          : isAbastecimentoSelecionado
+            ? abastecimentoForm.posto || postosAbastecimento.find((item) => item.id === abastecimentoForm.posto_id)?.nome || eventForm.local || null
+          : eventForm.local || null
+    const payloadMetaBase =
+      marcoAtual === "passagem"
+        ? {
+            passagem_ponto_origem:
+              passagemPontoSelecionado === PASSAGEM_OUTRO_PONTO_VALUE ? "viagem" : "rota",
+          }
+        : {}
+
+    const payloadAbastecimento = isAbastecimentoSelecionado
+      ? {
+          veiculo_id: abastecimentoForm.veiculo_id,
+          posto_id: abastecimentoForm.posto_id || null,
+          hodometro: Number(abastecimentoForm.hodometro || 0),
+          litros: Number(abastecimentoForm.litros || 0),
+          valor_total: Number(abastecimentoForm.valor_total || 0),
+          arla: abastecimentoForm.arla,
+          arla_valor: abastecimentoForm.arla === "sim" ? Number(abastecimentoForm.arla_valor || 0) : null,
+          posto:
+            abastecimentoForm.posto ||
+            postosAbastecimento.find((item) => item.id === abastecimentoForm.posto_id)?.nome ||
+            null,
+        }
+      : {}
+
+    const payloadMeta =
+      Object.keys({ ...payloadMetaBase, ...payloadAbastecimento }).length > 0
+        ? {
+            ...payloadMetaBase,
+            ...payloadAbastecimento,
+          }
+        : null
+
+    const fimIso = eventoPontual
+      ? null
+      : eventForm.fim_em
+        ? new Date(eventForm.fim_em).toISOString()
+        : null
+    const impactoMinutos = fimIso
+      ? Math.max(0, Math.round((new Date(fimIso).getTime() - new Date(inicioIso).getTime()) / 60000))
+      : 0
 
     const payload = {
       tipo_evento: eventForm.tipo_evento,
       status_evento: eventForm.status_evento,
       titulo: eventForm.titulo,
-      local: eventForm.local || null,
+      local: localEvento,
       observacao: eventForm.observacao || null,
-      previsto_em: eventForm.previsto_em ? new Date(eventForm.previsto_em).toISOString() : null,
-      impacto_minutos: Number(eventForm.impacto_minutos || 0),
-      comprovante_url: eventForm.comprovante_url || null,
-      payload: null,
+      previsto_em: fimIso,
+      impacto_minutos: impactoMinutos,
+      comprovante_url: null,
+      payload: payloadMeta,
     }
 
     if (activeTimelineEvent) {
       const { data, error } = await supabase
         .from("viagem_eventos")
-        .update(payload)
+        .update({ ...payload, ocorrido_em: inicioIso })
         .eq("id", activeTimelineEvent.id)
         .select("*")
         .single()
 
       if (!error && data) {
-        setEventos((prev) => prev.map((item) => (item.id === data.id ? data : item)))
+        if (isAbastecimentoSelecionado) {
+          const existingAbastecimentoId = String(
+            ((activeTimelineEvent.payload || {}) as Record<string, unknown>).abastecimento_id || "",
+          ) || null
+          const abastecimentoId = await upsertAbastecimentoRegistro({
+            userId,
+            eventPayload: (payloadMeta || {}) as Record<string, unknown>,
+            existingAbastecimentoId,
+            inicioIso,
+          })
+
+          if (abastecimentoId) {
+            await supabase
+              .from("viagem_eventos")
+              .update({
+                payload: {
+                  ...((payloadMeta || {}) as Record<string, unknown>),
+                  abastecimento_id: abastecimentoId,
+                },
+              })
+              .eq("id", activeTimelineEvent.id)
+          }
+        }
+        await refreshEventos()
+        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
         setEventModalOpen(false)
         setActiveTimelineEvent(null)
         await recalculateEta()
+      } else if (error && isMissingViagemEventosTableError(error.message, error.code)) {
+        const localEventos = readLocalEventos(viagemState.id)
+        const nowIso = new Date().toISOString()
+        const updatedLocal = localEventos.map((item) =>
+          item.id === activeTimelineEvent.id
+            ? {
+                ...item,
+                ...payload,
+                ocorrido_em: inicioIso,
+                updated_at: nowIso,
+              }
+            : item,
+        )
+
+        writeLocalEventos(viagemState.id, updatedLocal)
+        setEventos(updatedLocal)
+        setUsingLocalEventosFallback(true)
+
+        if (isAbastecimentoSelecionado) {
+          const existingAbastecimentoId = String(
+            ((activeTimelineEvent.payload || {}) as Record<string, unknown>).abastecimento_id || "",
+          ) || null
+          await upsertAbastecimentoRegistro({
+            userId,
+            eventPayload: (payloadMeta || {}) as Record<string, unknown>,
+            existingAbastecimentoId,
+            inicioIso,
+          })
+        }
+
+        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        setEventModalOpen(false)
+        setActiveTimelineEvent(null)
+        await recalculateEta()
+      } else if (error) {
+        alert(`Erro ao atualizar evento: ${getEventoSaveErrorMessage(error.message, error.code)}`)
       }
     } else {
       const { data, error } = await supabase
         .from("viagem_eventos")
         .insert({
-          user_id: user.id,
+          user_id: userId,
           viagem_id: viagemState.id,
           ...payload,
-          ocorrido_em: new Date().toISOString(),
+          ocorrido_em: inicioIso,
         })
         .select("*")
         .single()
 
       if (!error && data) {
-        const nextEvents = [data, ...eventos]
-        setEventos(nextEvents)
+        if (isAbastecimentoSelecionado) {
+          const abastecimentoId = await upsertAbastecimentoRegistro({
+            userId,
+            eventPayload: (payloadMeta || {}) as Record<string, unknown>,
+            inicioIso,
+          })
+
+          if (abastecimentoId) {
+            await supabase
+              .from("viagem_eventos")
+              .update({
+                payload: {
+                  ...((payloadMeta || {}) as Record<string, unknown>),
+                  abastecimento_id: abastecimentoId,
+                },
+              })
+              .eq("id", data.id)
+          }
+        }
+
+        await refreshEventos()
+        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
         setEventModalOpen(false)
         setActiveTimelineEvent(null)
         await recalculateEta()
+      } else if (error && isMissingViagemEventosTableError(error.message, error.code)) {
+        const nowIso = new Date().toISOString()
+        const localEvento: ViagemEvento = {
+          id: createLocalEventId(),
+          user_id: userId,
+          viagem_id: viagemState.id,
+          ...payload,
+          ocorrido_em: inicioIso,
+          created_at: nowIso,
+          updated_at: nowIso,
+        }
+
+        const localEventos = [localEvento, ...readLocalEventos(viagemState.id)]
+        writeLocalEventos(viagemState.id, localEventos)
+        setEventos(localEventos)
+        setUsingLocalEventosFallback(true)
+
+        if (isAbastecimentoSelecionado) {
+          await upsertAbastecimentoRegistro({
+            userId,
+            eventPayload: (payloadMeta || {}) as Record<string, unknown>,
+            inicioIso,
+          })
+        }
+
+        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        setEventModalOpen(false)
+        setActiveTimelineEvent(null)
+        await recalculateEta()
+      } else if (error) {
+        alert(`Erro ao salvar evento: ${getEventoSaveErrorMessage(error.message, error.code)}`)
       }
     }
 
+    setLoading(false)
+  }
+
+  const handleDeleteEvent = async () => {
+    if (!activeTimelineEvent) return
+
+    const confirmDelete = window.confirm("Deseja apagar este evento do ciclo?")
+    if (!confirmDelete) return
+
+    setLoading(true)
+
+    const { error } = await supabase
+      .from("viagem_eventos")
+      .delete()
+      .eq("id", activeTimelineEvent.id)
+
+    if (!error) {
+      await refreshEventos()
+      setEventModalOpen(false)
+      setActiveTimelineEvent(null)
+      await recalculateEta()
+      setLoading(false)
+      return
+    }
+
+    if (isMissingViagemEventosTableError(error.message, error.code)) {
+      const updatedLocal = readLocalEventos(viagemState.id).filter((item) => item.id !== activeTimelineEvent.id)
+      writeLocalEventos(viagemState.id, updatedLocal)
+      setEventos(updatedLocal)
+      setUsingLocalEventosFallback(true)
+      setEventModalOpen(false)
+      setActiveTimelineEvent(null)
+      await recalculateEta()
+      setLoading(false)
+      return
+    }
+
+    alert(`Erro ao apagar evento: ${getEventoSaveErrorMessage(error.message, error.code)}`)
     setLoading(false)
   }
 
@@ -1014,8 +1872,23 @@ export function ViagemDetalheClient({
     setLoading(false)
   }
 
+  const handleFinalizarCiclo = async () => {
+    setLoading(true)
+
+    const { error } = await supabase
+      .from("viagens")
+      .update({ status: "Concluida" })
+      .eq("id", viagemState.id)
+
+    if (!error) {
+      setViagemState((prev) => ({ ...prev, status: "Concluida" }))
+    }
+
+    setLoading(false)
+  }
+
   return (
-    <div className={embedded ? "space-y-5 w-full max-w-full overflow-x-hidden pb-1" : "space-y-6"}>
+    <div className={embedded ? "space-y-3 w-full max-w-full overflow-x-hidden pb-1" : "space-y-4"}>
       {!embedded && (
         <Link href="/viagens" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-2">
           <ArrowLeft className="size-4" />
@@ -1023,7 +1896,7 @@ export function ViagemDetalheClient({
         </Link>
       )}
 
-      <Tabs defaultValue="operacao" className="space-y-4 min-h-0">
+      <Tabs defaultValue="operacao" className="space-y-3 min-h-0">
         <TabsList className="w-full justify-start overflow-x-auto whitespace-nowrap gap-1 rounded-xl border border-border/60 bg-muted/40 p-1.5">
           <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="operacao">Operação</TabsTrigger>
           <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="financeiro">Financeiro</TabsTrigger>
@@ -1031,284 +1904,212 @@ export function ViagemDetalheClient({
           <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="kpis">KPIs</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="operacao" className="space-y-4 min-h-0">
-          <Card className="border-border/60 shadow-sm bg-gradient-to-br from-background to-muted/30">
-            <CardContent className="p-5 sm:p-6">
-              <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-5 items-center">
+        <TabsContent value="operacao" className="space-y-3 min-h-0">
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+            <div className="space-y-3 xl:col-span-9">
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(220px,1fr)] gap-3">
                 <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline" className="font-medium">Ciclo {cicloLabel}</Badge>
-                    <Badge variant="outline" className="font-medium">Viagem {viagemLabel}</Badge>
-                    <Badge variant="outline" className="font-medium">Cliente {clienteNome}</Badge>
-                  </div>
-                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">COCKPIT DA VIAGEM — TRANSLOG</h2>
-                  <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                    Status: <span className="font-semibold uppercase text-foreground">{faseOperacional}</span>
-                    {" · "}
-                    Previsão destino: <span className="font-medium text-foreground">{formatDateTime(viagemState.eta_destino_em)}</span>
-                    {" · "}
-                    Atraso: <span className={(viagemState.atraso_estimado_minutos || 0) > 0 ? "font-semibold text-destructive" : "font-medium text-foreground"}>
-                      {viagemState.atraso_estimado_minutos
-                        ? `${viagemState.atraso_estimado_minutos > 0 ? "+" : ""}${viagemState.atraso_estimado_minutos} min`
-                        : "No prazo"}
-                    </span>
-                  </p>
+                  <Card className="border-border/60 shadow-sm py-3 gap-2">
+                    <CardContent className="p-4 sm:p-4 space-y-1.5">
+                      <h2 className="text-xl font-bold tracking-tight">COCKPIT DO CICLO — TRANSLOG</h2>
+                      <p className="text-sm text-muted-foreground leading-tight">
+                        Ciclo: <span className="font-medium text-foreground">{cicloLabel}</span>
+                        {" | "}Veículo: <span className="font-medium text-foreground">{viagemState.veiculo?.placa_cavalo || "A DEFINIR"}</span>
+                        {" | "}Motorista: <span className="font-medium text-foreground">{viagemState.motorista?.nome || "A DEFINIR"}</span>
+                        {" | "}Status: <span className="font-semibold uppercase text-foreground">{faseOperacional}</span>
+                      </p>
+                      <p className="text-sm text-muted-foreground leading-tight">
+                        Marco atual: <span className="font-medium text-foreground">{ultimoMarco ? `${eventTypeLabels[ultimoMarco.tipo_evento]} (${ultimoMarco.local || "A DEFINIR"})` : "A DEFINIR"}</span>
+                      </p>
+                      <p className="text-sm text-muted-foreground leading-tight">
+                        Previsão próximo marco: <span className="font-medium text-foreground">{proximaAcaoTitulo} — {formatDateTime(proximaAcaoPrevisao)}</span>
+                        {" | "}Retorno: <span className="font-medium text-foreground">{viagemState.destino_real ? "DEFINIDO" : "EM ABERTO"}</span>
+                      </p>
+                      <p className="text-sm text-muted-foreground leading-tight">
+                        Previsão de chegada ao destino: <span className="font-medium text-foreground">{formatDateTime(previsaoChegadaDestino)}</span>
+                        {tempoTotalParadoMin > 0 ? (
+                          <>
+                            {" | "}Ajuste por tempo perdido: <span className="font-medium text-foreground">+{formatDurationByUnit(tempoTotalParadoMin)}</span>
+                          </>
+                        ) : null}
+                      </p>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="border-border/60 shadow-sm py-3 gap-2">
+                    <CardHeader className="pb-1 px-4">
+                      <CardTitle className="text-lg">ALERTAS / PENDÊNCIAS</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-0.5 pt-0 px-4">
+                      {pendenciasCockpit.map((item) => (
+                        <p key={item} className="text-sm text-muted-foreground">
+                          <TriangleAlert className="size-4 inline-block mr-2 align-text-bottom" />
+                          {item}
+                        </p>
+                      ))}
+                    </CardContent>
+                  </Card>
                 </div>
 
-                <div className="rounded-xl border border-border/70 bg-background/70 p-4 space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <p className="text-muted-foreground">Progresso da rota</p>
-                    <p className="font-semibold">{progressoRotaPercent.toFixed(0)}%</p>
-                  </div>
-                  <Progress value={progressoRotaPercent} className="h-3" />
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>Percorrido: {kmPercorrido.toFixed(0)} km</span>
-                    <span>Restante: {kmRestanteAutomatico.toFixed(0)} km</span>
-                  </div>
+                <div className="space-y-2 lg:self-start">
+                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Carregamento real vs planejado</p><p className="text-base font-semibold">{formatDurationByUnit(tempoCarregamentoRealMin)} / {formatDurationByUnit(tempoCarregamentoPlanejadoMin)}</p></CardContent></Card>
+                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Tempo total parado</p><p className="text-base font-semibold">{formatDurationByUnit(tempoTotalParadoMin)}</p></CardContent></Card>
+                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Diesel no ciclo (L)</p><p className="text-base font-semibold">{abastecimentosResumo.litros.toFixed(0)} L</p></CardContent></Card>
                 </div>
               </div>
-            </CardContent>
-          </Card>
 
-          <div className={embedded ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 xl:grid-cols-12 gap-4"}>
-            <Card className={embedded ? "border-border/60 shadow-sm" : "border-border/60 shadow-sm xl:col-span-8"}>
-              <CardHeader className="pb-2 border-b border-border/50 bg-muted/20 rounded-t-xl">
-                <CardTitle className="text-xl">TIMELINE — Planejado vs Real</CardTitle>
-                <p className="text-sm text-muted-foreground">Evolução da viagem com comparação entre previsto e realizado.</p>
-              </CardHeader>
-              <CardContent className="space-y-3 p-4 sm:p-5">
-                {percursoPlanejado.length === 0 && (
-                  <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                    Trajeto da rota não definido.
+
+              <Card className="border-border/60 shadow-sm py-3 gap-2">
+                <CardHeader className="pb-1 px-4">
+                  <CardTitle className="text-lg">EVENTOS DO CICLO</CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0 px-4">
+                  {usingLocalEventosFallback && (
+                    <p className="text-xs text-amber-600 mb-2">
+                      Modo local ativo: eventos salvos no navegador até publicar a migration no Supabase.
+                    </p>
+                  )}
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[860px] text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-muted-foreground">
+                          <th className="py-2 pr-2">#</th>
+                          <th className="py-2 pr-2">Tipo</th>
+                          <th className="py-2 pr-2">Local</th>
+                          <th className="py-2 pr-2">Início</th>
+                          <th className="py-2 pr-2">Fim</th>
+                          <th className="py-2 pr-2">Duração</th>
+                          <th className="py-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {eventosCockpit.length === 0 && (
+                          <tr>
+                            <td className="py-3 text-muted-foreground" colSpan={7}>
+                              Nenhum evento registrado neste ciclo.
+                            </td>
+                          </tr>
+                        )}
+                        {eventosCockpit.map((evento) => (
+                          <tr
+                            key={evento.id}
+                            className="border-b border-border/50 cursor-pointer hover:bg-muted/30"
+                            onClick={() => {
+                              setActiveTimelineEvent(evento.source)
+                              const payloadData = getAbastecimentoPayloadData((evento.source.payload || null) as Record<string, unknown> | null)
+                              setAbastecimentoForm({
+                                veiculo_id: String((evento.source.payload as Record<string, unknown> | null)?.veiculo_id || viagemState.veiculo_id || ""),
+                                posto_id: payloadData.posto_id,
+                                hodometro: payloadData.hodometro,
+                                litros: payloadData.litros,
+                                valor_total: payloadData.valor_total,
+                                posto: payloadData.posto || evento.source.local || "",
+                                arla: payloadData.arla === "sim" ? "sim" : "nao",
+                                arla_valor: payloadData.arla_valor,
+                              })
+                              setEventForm({
+                                tipo_evento: evento.source.tipo_evento,
+                                status_evento: evento.source.status_evento,
+                                titulo: evento.source.titulo,
+                                local: evento.source.local || "",
+                                observacao: evento.source.observacao || "",
+                                inicio_em: toDatetimeLocal(evento.source.ocorrido_em),
+                                fim_em: toDatetimeLocal(evento.source.previsto_em || evento.source.ocorrido_em),
+                              })
+                              setEventModalOpen(true)
+                            }}
+                          >
+                            <td className="py-2 pr-2">{evento.ordem}</td>
+                            <td className="py-2 pr-2">{evento.tipo}</td>
+                            <td className="py-2 pr-2">{evento.local}</td>
+                            <td className="py-2 pr-2">{evento.inicio}</td>
+                            <td className="py-2 pr-2">{evento.fim}</td>
+                            <td className="py-2 pr-2">{evento.duracao}</td>
+                            <td className="py-2">{evento.status}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                )}
+                  <p className="text-xs text-muted-foreground mt-3">Clique em uma linha para registrar apenas início, fim e observação.</p>
+                </CardContent>
+              </Card>
 
-                {percursoPlanejado.map((ponto, index) => {
-                  const previsto = ponto.tipo === "origem" ? ponto.partidaPlanejada : ponto.chegadaPlanejada
-                  const realizado = ponto.tipo === "origem" ? ponto.partidaReal : ponto.chegadaReal
-                  const concluido = ponto.tipo === "origem"
-                    ? Boolean(ponto.partidaReal)
-                    : ponto.tipo === "destino"
-                      ? Boolean(ponto.chegadaReal)
-                      : Boolean(ponto.chegadaReal)
-                  const emTransito = !concluido && index === primeiroPendenteIndex
+              <Card className="border-border/60 shadow-sm w-full">
+                <CardHeader className="pb-2"><CardTitle className="text-xl">VIAGENS DO CICLO (organização)</CardTitle></CardHeader>
+                <CardContent className="space-y-2 pt-0">
+                  <p className="text-sm">1) {viagemLabel} — {viagemState.origem_real || "A DEFINIR"} → {viagemState.destino_real || "A DEFINIR"} <span className="text-muted-foreground">({statusNormalizado === "Em andamento" ? "em execução" : statusNormalizado.toLowerCase()})</span></p>
+                  <p className="text-sm">2) V-RETORNO — {viagemState.destino_real ? "planejado" : "RETORNO: EM ABERTO (criar quando fechar)"}</p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => openNewEventModal("saida")}>+ Criar viagem de retorno</Button>
+                </CardContent>
+              </Card>
 
-                  const deltaMin = previsto && realizado
-                    ? Math.round((new Date(realizado).getTime() - new Date(previsto).getTime()) / 60000)
-                    : null
+              <Card className="border-border/60 shadow-sm w-full">
+                <CardHeader className="pb-2"><CardTitle className="text-xl">FECHAMENTO</CardTitle></CardHeader>
+                <CardContent className="space-y-3 pt-0">
+                  <Button type="button" onClick={handleFinalizarCiclo} disabled={loading}>
+                    {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                    Finalizar ciclo
+                  </Button>
+                  <div className="space-y-1 text-sm text-muted-foreground">
+                    <p>{eventosOrdenados[0]?.status_evento === "concluido" ? "☑" : "☐"} Último evento encerrado</p>
+                    <p>{abastecimentosResumo.qtd > 0 ? "☑" : "☐"} Abastecimentos lançados (se houve)</p>
+                    <p>{saldoAtualEstimadoLitros !== null ? "☑" : "☐"} Saldo final do tanque (L) informado</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
 
-                  const itemTone = concluido
-                    ? "border-emerald-500/30 bg-emerald-500/5"
-                    : emTransito
-                      ? "border-primary/40 bg-primary/5"
-                      : "border-border/70 bg-background"
-
-                  const markerTone = concluido
-                    ? "bg-emerald-500/15 text-emerald-700"
-                    : emTransito
-                      ? "bg-primary/15 text-primary"
-                      : "bg-muted text-muted-foreground"
-
-                  const tipoPontoLabel = ponto.tipo === "origem"
-                    ? "Origem"
-                    : ponto.tipo === "destino"
-                      ? "Destino"
-                      : getPontoParadaTipoLabel(ponto.tipoParada)
-
-                  const isExpanded = expandedTimelinePointId === ponto.id
-                  const intermediarioIndex = ponto.tipo === "intermediario"
-                    ? Math.max(0, (ponto.ordemIntermediario || 1) - 1)
-                    : -1
-                  const intermediarioReal = intermediarioIndex >= 0
-                    ? timelineReal.intermediarios[intermediarioIndex]
-                    : null
-
-                  return (
-                    <div
-                      key={ponto.id}
-                      className={`rounded-xl border p-3 sm:p-4 transition-colors cursor-pointer ${itemTone}`}
-                      onClick={() => setExpandedTimelinePointId((prev) => (prev === ponto.id ? null : ponto.id))}
+            <div className="space-y-3 xl:col-span-3">
+              <Card className="border-border/60 shadow-sm">
+                <CardHeader className="pb-2"><CardTitle className="text-xl">PAINEL OPERACIONAL</CardTitle></CardHeader>
+                <CardContent className="space-y-2 pt-0">
+                  <p className="text-sm text-muted-foreground">AÇÕES RÁPIDAS ({smartQuickActions.length} botões) · ao clicar, informe início e fim</p>
+                  {smartQuickActions.map(({ label, action }) => (
+                    <Button
+                      key={label}
+                      type="button"
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => handleQuickActionRegister(action)}
+                      disabled={loading}
                     >
-                      <div className="flex items-start gap-3">
-                        <div className={`mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold ${markerTone}`}>
-                          {concluido ? "●" : emTransito ? "▶" : "○"}
-                        </div>
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-base font-semibold leading-tight">{ponto.label}</p>
-                            <Badge variant="outline" className="text-[11px] uppercase tracking-wide">{tipoPontoLabel}</Badge>
-                            {emTransito && <Badge className="text-[11px]">Em trânsito</Badge>}
-                          </div>
-                          <p className="text-sm text-muted-foreground">Previsto: {formatDateTime(previsto || null)}</p>
-                          {realizado && <p className="text-sm">Realizado: <span className="font-medium">{formatDateTime(realizado)}</span></p>}
-                          {deltaMin !== null && (
-                            <p className={deltaMin > 0 ? "text-xs font-medium text-destructive" : "text-xs font-medium text-emerald-700"}>
-                              {deltaMin > 0
-                                ? `Atraso de +${deltaMin} min`
-                                : deltaMin < 0
-                                  ? `Antecipado em ${Math.abs(deltaMin)} min`
-                                  : "No horário"}
-                            </p>
-                          )}
+                      {label}
+                    </Button>
+                  ))}
+                </CardContent>
+              </Card>
 
-                          {!isExpanded && (
-                            <p className="text-xs text-primary/80 pt-1">Clique para registrar horário real</p>
-                          )}
-
-                          {isExpanded && (
-                            <div
-                              className="mt-3 rounded-lg border border-border/70 bg-background/80 p-3 space-y-3"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              {ponto.tipo === "origem" && (
-                                <div className="grid gap-2">
-                                  <Label className="text-xs">Partida real</Label>
-                                  <Input
-                                    type="datetime-local"
-                                    value={timelineReal.origem_partida_real || ""}
-                                    onChange={(event) =>
-                                      setTimelineReal((prev) => ({
-                                        ...prev,
-                                        origem_partida_real: event.target.value,
-                                      }))
-                                    }
-                                  />
-                                </div>
-                              )}
-
-                              {ponto.tipo === "intermediario" && (
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div className="grid gap-2">
-                                    <Label className="text-xs">Chegada real</Label>
-                                    <Input
-                                      type="datetime-local"
-                                      value={intermediarioReal?.chegada_real || ""}
-                                      onChange={(event) =>
-                                        updateTimelineRealIntermediario(intermediarioIndex, "chegada_real", event.target.value)
-                                      }
-                                    />
-                                  </div>
-                                  <div className="grid gap-2">
-                                    <Label className="text-xs">Partida real</Label>
-                                    <Input
-                                      type="datetime-local"
-                                      value={intermediarioReal?.partida_real || ""}
-                                      onChange={(event) =>
-                                        updateTimelineRealIntermediario(intermediarioIndex, "partida_real", event.target.value)
-                                      }
-                                    />
-                                  </div>
-                                </div>
-                              )}
-
-                              {ponto.tipo === "destino" && (
-                                <div className="grid gap-2">
-                                  <Label className="text-xs">Chegada real</Label>
-                                  <Input
-                                    type="datetime-local"
-                                    value={timelineReal.destino_chegada_real || ""}
-                                    onChange={(event) =>
-                                      setTimelineReal((prev) => ({
-                                        ...prev,
-                                        destino_chegada_real: event.target.value,
-                                      }))
-                                    }
-                                  />
-                                </div>
-                              )}
-
-                              <div className="flex flex-wrap gap-2 pt-1">
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  onClick={async () => {
-                                    await salvarTimelineReal()
-                                    setExpandedTimelinePointId(null)
-                                  }}
-                                  disabled={loading}
-                                >
-                                  Salvar horário real
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => setExpandedTimelinePointId(null)}
-                                >
-                                  Cancelar
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
+              <Card className="border-border/60 shadow-sm">
+                <CardHeader className="pb-2"><CardTitle className="text-xl">DIESEL (LITROS)</CardTitle></CardHeader>
+                <CardContent className="space-y-3 pt-0 text-sm">
+                  <div className="grid grid-cols-1 gap-2">
+                    <div className="grid gap-1">
+                      <Label htmlFor="saldoInicialLitros">Saldo inicial (L)</Label>
+                      <Input
+                        id="saldoInicialLitros"
+                        type="number"
+                        value={saldoInicialLitros}
+                        onChange={(event) => setSaldoInicialLitros(event.target.value)}
+                      />
                     </div>
-                  )
-                })}
-
-                {proximoPontoTimeline && (
-                  <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
-                    <p className="text-base font-semibold text-primary">
-                      ▶ EM TRÂNSITO → {proximoPontoTimeline.label}
-                    </p>
-                    <p className="text-sm mt-1">
-                      Distância restante: <span className="font-medium">{kmRestanteAutomatico.toFixed(0)} km</span>
-                      {" · "}
-                      Previsão de chegada: <span className="font-medium">{formatDateTime((proximoPontoTimeline.chegadaPlanejada || viagemState.eta_destino_em) || null)}</span>
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className={embedded ? "border-border/60 shadow-sm" : "border-border/60 shadow-sm xl:col-span-4"}>
-              <CardContent className="p-4 sm:p-5 space-y-4">
-                <section className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-1">
-                  <h3 className="text-lg font-semibold uppercase tracking-wide">Próxima ação</h3>
-                  <p className="text-xl font-semibold leading-tight">{proximaAcaoTitulo}</p>
-                  <p className="text-sm text-muted-foreground">Previsão: {formatDateTime(proximaAcaoPrevisao)}</p>
-                  <p className="text-sm text-muted-foreground">
-                    Tempo estimado: {tempoRestanteHoras !== null ? `${tempoRestanteHoras.toFixed(1)}h` : "-"}
-                  </p>
-                </section>
-
-                <section className="rounded-xl border border-border/70 p-4 space-y-3">
-                  <h3 className="text-lg font-semibold uppercase tracking-wide">Indicadores</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="rounded-lg bg-muted/30 p-2.5">
-                      <p className="text-xs text-muted-foreground">KM total</p>
-                      <p className="text-lg font-semibold">{(kmPlanejado > 0 ? kmPlanejado : kmReal).toFixed(0)}</p>
-                    </div>
-                    <div className="rounded-lg bg-muted/30 p-2.5">
-                      <p className="text-xs text-muted-foreground">KM percorrido</p>
-                      <p className="text-lg font-semibold">{kmPercorrido.toFixed(0)}</p>
-                    </div>
-                    <div className="rounded-lg bg-muted/30 p-2.5">
-                      <p className="text-xs text-muted-foreground">KM restante</p>
-                      <p className="text-lg font-semibold">{kmRestanteAutomatico.toFixed(0)}</p>
-                    </div>
-                    <div className="rounded-lg bg-muted/30 p-2.5">
-                      <p className="text-xs text-muted-foreground">Tempo restante</p>
-                      <p className="text-lg font-semibold">{tempoRestanteHoras !== null ? `${tempoRestanteHoras.toFixed(1)}h` : "-"}</p>
+                    <p>Abastecido no ciclo: <span className="font-medium">{abastecimentosResumo.litros.toFixed(0)} L</span></p>
+                    <p>Consumo estimado: <span className="font-medium">{consumoEstimadoLitros !== null ? `${consumoEstimadoLitros.toFixed(0)} L` : "A DEFINIR"}</span></p>
+                    <p>Saldo atual estimado: <span className="font-medium">{saldoAtualEstimadoLitros !== null ? `${saldoAtualEstimadoLitros.toFixed(0)} L` : "A DEFINIR"}</span></p>
+                    <div className="grid gap-1">
+                      <Label htmlFor="consumoMedioEditavel">Consumo médio (km/L)</Label>
+                      <Input
+                        id="consumoMedioEditavel"
+                        type="number"
+                        step="0.1"
+                        value={consumoMedioEditavel}
+                        onChange={(event) => setConsumoMedioEditavel(Number(event.target.value) || 0)}
+                      />
                     </div>
                   </div>
-                  <div className="rounded-lg border border-border/70 p-2.5">
-                    <p className="text-xs text-muted-foreground">Consumo médio</p>
-                    <p className="text-base font-semibold">{consumoMedioOperacao > 0 ? `${consumoMedioOperacao.toFixed(1)} km/L` : "-"}</p>
-                  </div>
-                </section>
-
-                <section className="rounded-xl border border-border/70 p-4 space-y-2">
-                  <h3 className="text-lg font-semibold uppercase tracking-wide">Combustível do ciclo</h3>
-                  <div className="space-y-1 text-sm sm:text-base">
-                    <p>Abastecido no ciclo: <span className="font-semibold">{abastecimentosResumo.litros.toFixed(0)} L</span></p>
-                    <p>Consumo previsto total: <span className="font-semibold">{consumoPrevistoTotalLitros !== null ? `${consumoPrevistoTotalLitros.toFixed(0)} L` : "-"}</span></p>
-                    <p>Necessário abastecer: <span className="font-semibold">{necessarioAbastecerLitros !== null ? `${necessarioAbastecerLitros.toFixed(0)} L` : "-"}</span></p>
-                  </div>
-                </section>
-
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </TabsContent>
 
@@ -1545,17 +2346,52 @@ export function ViagemDetalheClient({
             <DialogTitle>{activeTimelineEvent ? "Atualizar ponto da timeline" : "Registrar evento"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {quickActionPartidaChegadaAtiva && (
               <div>
-                <Label>Tipo</Label>
-                <Select value={eventForm.tipo_evento} onValueChange={(value: EventoViagemTipo) => setEventForm((prev) => ({ ...prev, tipo_evento: value }))}>
+                <Label>Tipo de marco</Label>
+                <Select value={selectedMarcoOperacional} onValueChange={(value: MarcoOperacionalTipo) => handleChangeMarcoOperacional(value)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Object.entries(eventTypeLabels).map(([value, label]) => (
-                      <SelectItem key={value} value={value}>{label}</SelectItem>
-                    ))}
+                    <SelectItem value="saida">{marcoOperacionalConfig.saida.label}</SelectItem>
+                    <SelectItem value="chegada">{marcoOperacionalConfig.chegada.label}</SelectItem>
+                    <SelectItem value="passagem">{marcoOperacionalConfig.passagem.label}</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            )}
+            <div>
+              <Label>Evento</Label>
+              <Input value={eventForm.titulo} onChange={(event) => setEventForm((prev) => ({ ...prev, titulo: event.target.value }))} />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <Label>Local</Label>
+                {isPassagemSelecionada ? (
+                  <div className="space-y-2">
+                    <Select value={passagemPontoSelecionado || (pontosPassagemOptions[0] || PASSAGEM_OUTRO_PONTO_VALUE)} onValueChange={handleSelectPassagemPonto}>
+                      <SelectTrigger><SelectValue placeholder="Selecione um ponto" /></SelectTrigger>
+                      <SelectContent>
+                        {pontosPassagemOptions.map((ponto) => (
+                          <SelectItem key={ponto} value={ponto}>{ponto}</SelectItem>
+                        ))}
+                        <SelectItem value={PASSAGEM_OUTRO_PONTO_VALUE}>Outro ponto (somente nesta viagem)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {passagemPontoSelecionado === PASSAGEM_OUTRO_PONTO_VALUE && (
+                      <Input
+                        placeholder="Ex.: Posto BR - km 230"
+                        value={novoPontoPassagem}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          setNovoPontoPassagem(value)
+                          setEventForm((prev) => ({ ...prev, local: value }))
+                        }}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <Input value={eventForm.local} onChange={(event) => setEventForm((prev) => ({ ...prev, local: event.target.value }))} />
+                )}
               </div>
               <div>
                 <Label>Status</Label>
@@ -1569,36 +2405,163 @@ export function ViagemDetalheClient({
                 </Select>
               </div>
             </div>
-            <div>
-              <Label>Título</Label>
-              <Input value={eventForm.titulo} onChange={(event) => setEventForm((prev) => ({ ...prev, titulo: event.target.value }))} />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <Label>Registrar chegada/saída - local</Label>
-                <Input value={eventForm.local} onChange={(event) => setEventForm((prev) => ({ ...prev, local: event.target.value }))} />
+
+            {isAbastecimentoSelecionado && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-md border border-border/60 p-3">
+                <div>
+                  <Label>Veículo *</Label>
+                  <Input
+                    value={`${viagemState.veiculo?.placa_cavalo || "-"}${viagemState.veiculo?.modelo ? ` - ${viagemState.veiculo.modelo}` : ""}`}
+                    disabled
+                  />
+                </div>
+                <div>
+                  <Label>Hodômetro (km) *</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={abastecimentoForm.hodometro}
+                    onChange={(event) => setAbastecimentoForm((prev) => ({ ...prev, hodometro: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>Litros *</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={abastecimentoForm.litros}
+                    onChange={(event) => setAbastecimentoForm((prev) => ({ ...prev, litros: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>Valor Total (R$) *</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={abastecimentoForm.valor_total}
+                    onChange={(event) => setAbastecimentoForm((prev) => ({ ...prev, valor_total: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>Posto cadastrado</Label>
+                  <Select
+                    value={abastecimentoForm.posto_id || undefined}
+                    onValueChange={(value) => {
+                      const postoSelecionado = postosAbastecimento.find((posto) => posto.id === value)
+                      setAbastecimentoForm((prev) => ({
+                        ...prev,
+                        posto_id: value,
+                        posto: postoSelecionado?.nome || prev.posto,
+                      }))
+                      if (postoSelecionado?.nome) {
+                        setEventForm((prev) => ({ ...prev, local: postoSelecionado.nome }))
+                      }
+                    }}
+                  >
+                    <SelectTrigger><SelectValue placeholder={postosAbastecimento.length > 0 ? "Selecione um posto" : "Nenhum posto cadastrado"} /></SelectTrigger>
+                    <SelectContent>
+                      {postosAbastecimento.map((posto) => (
+                        <SelectItem key={posto.id} value={posto.id}>
+                          {posto.nome}{posto.localidade ? ` • ${posto.localidade}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Posto (livre)</Label>
+                  <Input
+                    value={abastecimentoForm.posto}
+                    placeholder="Use se o posto não estiver cadastrado"
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setAbastecimentoForm((prev) => ({ ...prev, posto: value }))
+                      if (value) {
+                        setEventForm((prev) => ({ ...prev, local: value }))
+                      }
+                    }}
+                  />
+                </div>
+                <div>
+                  <Label>ARLA</Label>
+                  <Select
+                    value={abastecimentoForm.arla}
+                    onValueChange={(value: "sim" | "nao") =>
+                      setAbastecimentoForm((prev) => ({
+                        ...prev,
+                        arla: value,
+                        arla_valor: value === "sim" ? prev.arla_valor : "",
+                      }))
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="nao">Não</SelectItem>
+                      <SelectItem value="sim">Sim</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {abastecimentoForm.arla === "sim" && (
+                  <div>
+                    <Label>Valor ARLA (R$)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={abastecimentoForm.arla_valor}
+                      onChange={(event) =>
+                        setAbastecimentoForm((prev) => ({ ...prev, arla_valor: event.target.value }))
+                      }
+                    />
+                  </div>
+                )}
               </div>
+            )}
+
+            {quickActionPartidaChegadaAtiva ? (
               <div>
-                <Label>Impacto em minutos</Label>
-                <Input type="number" value={eventForm.impacto_minutos} onChange={(event) => setEventForm((prev) => ({ ...prev, impacto_minutos: event.target.value }))} />
+                <Label>
+                  {selectedMarcoOperacional === "saida"
+                    ? "Data/hora da saída"
+                    : selectedMarcoOperacional === "chegada"
+                      ? "Data/hora da chegada"
+                      : "Data/hora da passagem"}
+                </Label>
+                <Input
+                  type="datetime-local"
+                  value={eventForm.inicio_em}
+                  onChange={(event) => setEventForm((prev) => ({ ...prev, inicio_em: event.target.value }))}
+                />
               </div>
-            </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <Label>Início (data/hora)</Label>
+                  <Input type="datetime-local" value={eventForm.inicio_em} onChange={(event) => setEventForm((prev) => ({ ...prev, inicio_em: event.target.value }))} />
+                </div>
+                <div>
+                  <Label>Fim (data/hora)</Label>
+                  <Input type="datetime-local" value={eventForm.fim_em} onChange={(event) => setEventForm((prev) => ({ ...prev, fim_em: event.target.value }))} />
+                </div>
+              </div>
+            )}
             <div>
-              <Label>Previsto em</Label>
-              <Input type="datetime-local" value={eventForm.previsto_em} onChange={(event) => setEventForm((prev) => ({ ...prev, previsto_em: event.target.value }))} />
-            </div>
-            <div>
-              <Label>Observação</Label>
+              <Label>Observação curta</Label>
               <Textarea value={eventForm.observacao} onChange={(event) => setEventForm((prev) => ({ ...prev, observacao: event.target.value }))} />
             </div>
-            <div>
-              <Label>Anexar comprovante (URL)</Label>
-              <Input value={eventForm.comprovante_url} onChange={(event) => setEventForm((prev) => ({ ...prev, comprovante_url: event.target.value }))} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {activeTimelineEvent ? (
+                <Button type="button" variant="outline" className="border-destructive/40 text-destructive hover:text-destructive" onClick={handleDeleteEvent} disabled={loading}>
+                  {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                  Apagar evento
+                </Button>
+              ) : (
+                <div />
+              )}
+              <Button className="w-full" onClick={handleSaveEvent} disabled={loading}>
+                {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                Salvar evento
+              </Button>
             </div>
-            <Button className="w-full" onClick={handleSaveEvent} disabled={loading}>
-              {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
-              Salvar evento
-            </Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -14,6 +14,7 @@ export interface EtaCalculationInput {
   parametros: EtaParametro[]
   kmRestante: number
   paradasPrevistas?: EtaStopCounts
+  tempoPerdidoMin?: number
   etaPlanejado?: string | null
   now?: Date
 }
@@ -24,6 +25,7 @@ export interface EtaCalculationResult {
   velocidadeMediaKmh: number
   tempoDeslocamentoMin: number
   tempoParadasMin: number
+  tempoPerdidoMin: number
   horaBase: Date
 }
 
@@ -128,8 +130,10 @@ export function calculateEta(input: EtaCalculationInput): EtaCalculationResult {
     (paradas.coleta || 0) * Number(parametro.parada_coleta_min) +
     (paradas.espera || 0) * Number(parametro.parada_espera_min)
 
+  const tempoPerdidoMin = Math.max(0, Math.round(Number(input.tempoPerdidoMin || 0)))
+
   const eta = new Date(horaBase)
-  eta.setMinutes(eta.getMinutes() + tempoDeslocamentoMin + tempoParadasMin)
+  eta.setMinutes(eta.getMinutes() + tempoDeslocamentoMin + tempoParadasMin + tempoPerdidoMin)
 
   const etaPlanejado = input.etaPlanejado ? new Date(input.etaPlanejado) : null
   const atrasoMinutos = etaPlanejado
@@ -142,6 +146,7 @@ export function calculateEta(input: EtaCalculationInput): EtaCalculationResult {
     velocidadeMediaKmh,
     tempoDeslocamentoMin,
     tempoParadasMin,
+    tempoPerdidoMin,
     horaBase,
   }
 }
