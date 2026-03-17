@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { ViagemDetalheClient } from "./[viagemId]/viagemDetalheClient"
 import { Card, CardContent } from "@/components/ui/card"
@@ -91,6 +91,7 @@ interface ViagensClientProps {
 }
 
 interface ViagemFormData {
+  ciclo_id: string
   cliente_id: string
   veiculo_id: string
   motorista_id: string
@@ -124,8 +125,26 @@ const statusColors: Record<string, string> = {
 
 function normalizeViagemStatus(status?: string | null) {
   if (!status) return "Planejada"
-  if (status === "Concluída") return "Concluida"
+  const normalized = status
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim()
+
+  if (["concluida", "fechada", "fechado", "finalizada", "encerrada"].includes(normalized)) return "Concluida"
+  if (["em andamento", "andamento", "aberta", "aberto", "em_execucao", "executando"].includes(normalized)) return "Em andamento"
+  if (["planejada", "planejado"].includes(normalized)) return "Planejada"
+  if (["cancelada", "cancelado"].includes(normalized)) return "Cancelada"
   return status
+}
+
+type CicloResumo = {
+  cicloId: string
+  viagens: Viagem[]
+  viagemDestaque: Viagem
+  statusCiclo: "Planejada" | "Em andamento" | "Concluida" | "Cancelada"
+  valorTotal: number
+  kmTotal: number
 }
 
 function formatCurrency(value: number) {
@@ -159,10 +178,23 @@ function toIsoOrNull(value?: string | null) {
   return new Date(value).toISOString()
 }
 
+function addHoursToIso(baseIso: string, hours: number) {
+  const base = new Date(baseIso)
+  if (!Number.isFinite(base.getTime()) || !Number.isFinite(hours)) return null
+  return new Date(base.getTime() + hours * 60 * 60 * 1000).toISOString()
+}
+
 function buildIntermediarioChave(ponto: PontoIntermediario, index: number) {
   const cidade = (ponto.cidade || "").trim().toLowerCase()
   const estado = (ponto.estado || "").trim().toLowerCase()
   return `${index}:${cidade}:${estado}`
+}
+
+function buildDefaultCycleId() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const stamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(4, 14)
+  return `CIC-${year}-${stamp}`
 }
 
 function buildPlanejamentoRota(
@@ -173,25 +205,54 @@ function buildPlanejamentoRota(
     (existing?.intermediarios || []).map((item) => [item.chave, item]),
   )
 
+  const origemPartidaPlanejada = existing?.origem_partida_planejada || null
+
+  let cursorPrevisto = origemPartidaPlanejada
+
   const intermediarios = (rota.pontos_intermediarios || [])
     .filter((ponto) => ponto.cidade && ponto.estado)
     .map((ponto, index): ViagemPlanejamentoIntermediario => {
       const chave = buildIntermediarioChave(ponto, index)
       const current = existingIntermediarios.get(chave)
 
+      const tempoTrechoHoras =
+        ponto.tempo_trecho_horas !== undefined && ponto.tempo_trecho_horas !== null
+          ? Number(ponto.tempo_trecho_horas)
+          : null
+
+      const chegadaPlanejadaAuto =
+        !current?.chegada_planejada && cursorPrevisto && tempoTrechoHoras !== null && tempoTrechoHoras >= 0
+          ? addHoursToIso(cursorPrevisto, tempoTrechoHoras)
+          : null
+
+      const chegadaPlanejada = current?.chegada_planejada || chegadaPlanejadaAuto || null
+      const partidaPlanejada = current?.partida_planejada || chegadaPlanejada || null
+
+      if (partidaPlanejada) {
+        cursorPrevisto = partidaPlanejada
+      }
+
       return {
         chave,
         cidade: ponto.cidade,
         estado: ponto.estado,
         tipo_parada: ponto.tipo_parada,
-        chegada_planejada: current?.chegada_planejada || null,
-        partida_planejada: current?.partida_planejada || null,
+        chegada_planejada: chegadaPlanejada,
+        partida_planejada: partidaPlanejada,
       }
     })
 
+  const destinoChegadaPlanejadaAuto =
+    !existing?.destino_chegada_planejada &&
+    origemPartidaPlanejada &&
+    rota.tempo_ciclo_esperado_horas !== null &&
+    rota.tempo_ciclo_esperado_horas !== undefined
+      ? addHoursToIso(origemPartidaPlanejada, Number(rota.tempo_ciclo_esperado_horas))
+      : null
+
   return {
-    origem_partida_planejada: existing?.origem_partida_planejada || null,
-    destino_chegada_planejada: existing?.destino_chegada_planejada || null,
+    origem_partida_planejada: origemPartidaPlanejada,
+    destino_chegada_planejada: existing?.destino_chegada_planejada || destinoChegadaPlanejadaAuto || null,
     intermediarios,
   }
 }
@@ -286,6 +347,7 @@ export function ViagensClient({
   const [showAdvancedForm, setShowAdvancedForm] = useState(false)
 
   const [formData, setFormData] = useState<ViagemFormData>({
+    ciclo_id: buildDefaultCycleId(),
     cliente_id: "",
     veiculo_id: "",
     motorista_id: "",
@@ -305,6 +367,7 @@ export function ViagensClient({
 
   const resetForm = () => {
     setFormData({
+      ciclo_id: buildDefaultCycleId(),
       cliente_id: "",
       veiculo_id: "",
       motorista_id: "",
@@ -336,6 +399,7 @@ export function ViagensClient({
 
     setSelectedViagem(viagem)
     setFormData({
+      ciclo_id: viagem.ciclo_id || "",
       cliente_id: viagem.cliente_id || "",
       veiculo_id: viagem.veiculo_id || "",
       motorista_id: viagem.motorista_id || "",
@@ -412,6 +476,7 @@ export function ViagensClient({
     }
 
     const viagemDataBase = {
+      ciclo_id: formData.ciclo_id.trim() || null,
       cliente_id: formData.cliente_id || null,
       veiculo_id: formData.veiculo_id || null,
       motorista_id: formData.motorista_id || null,
@@ -435,18 +500,33 @@ export function ViagensClient({
       planejamento_rota: toStoragePlanejamentoRota(formData.planejamento_rota),
     }
 
+    const viagemDataBaseCompat = {
+      ...viagemDataBase,
+    }
+
+    delete (viagemDataBaseCompat as Record<string, unknown>).ciclo_id
+
+    const viagemDataCompat = {
+      ...viagemData,
+    }
+
+    delete (viagemDataCompat as Record<string, unknown>).ciclo_id
+
     if (selectedViagem) {
       let { error } = await supabase
         .from("viagens")
         .update(viagemData)
         .eq("id", selectedViagem.id)
 
-      if (error?.message?.toLowerCase().includes("planejamento_rota")) {
-        const retry = await supabase
-          .from("viagens")
-          .update(viagemDataBase)
-          .eq("id", selectedViagem.id)
-        error = retry.error
+      if (error) {
+        const errorMsg = error.message?.toLowerCase() || ""
+        if (errorMsg.includes("planejamento_rota") || errorMsg.includes("ciclo_id")) {
+          const retry = await supabase
+            .from("viagens")
+            .update(errorMsg.includes("planejamento_rota") ? viagemDataBaseCompat : viagemDataCompat)
+            .eq("id", selectedViagem.id)
+          error = retry.error
+        }
       }
 
       if (!error) {
@@ -462,14 +542,17 @@ export function ViagensClient({
         .select("id")
         .single()
 
-      if (error?.message?.toLowerCase().includes("planejamento_rota")) {
-        const retry = await supabase
-          .from("viagens")
-          .insert(viagemDataBase)
-          .select("id")
-          .single()
-        data = retry.data
-        error = retry.error
+      if (error) {
+        const errorMsg = error.message?.toLowerCase() || ""
+        if (errorMsg.includes("planejamento_rota") || errorMsg.includes("ciclo_id")) {
+          const retry = await supabase
+            .from("viagens")
+            .insert(errorMsg.includes("planejamento_rota") ? viagemDataBaseCompat : viagemDataCompat)
+            .select("id")
+            .single()
+          data = retry.data
+          error = retry.error
+        }
       }
 
       if (!error && data) {
@@ -574,19 +657,70 @@ export function ViagensClient({
     setCockpitLoading(false)
   }
 
-  const filteredViagens = viagens.filter(v => {
-    const status = normalizeViagemStatus(v.status)
-    const matchesSearch = 
-      v.cliente?.nome?.toLowerCase().includes(search.toLowerCase()) ||
-      v.motorista?.nome?.toLowerCase().includes(search.toLowerCase()) ||
-      v.veiculo?.placa_cavalo?.toLowerCase().includes(search.toLowerCase()) ||
-      v.origem_real?.toLowerCase().includes(search.toLowerCase()) ||
-      v.destino_real?.toLowerCase().includes(search.toLowerCase())
-    
+  const ciclosResumo = useMemo<CicloResumo[]>(() => {
+    const grupos = new Map<string, Viagem[]>()
+
+    for (const viagem of viagens) {
+      const cicloNormalizado = viagem.ciclo_id?.trim()
+      const cicloFallbackId = viagem.viagem_pai_id || viagem.id
+      const cicloKey = cicloNormalizado || `SEM-CICLO-${cicloFallbackId}`
+      const lista = grupos.get(cicloKey) || []
+      lista.push(viagem)
+      grupos.set(cicloKey, lista)
+    }
+
+    const getStatusCiclo = (lista: Viagem[]): CicloResumo["statusCiclo"] => {
+      const statuses = lista.map((item) => normalizeViagemStatus(item.status))
+      if (statuses.some((s) => s === "Em andamento")) return "Em andamento"
+      if (statuses.length > 0 && statuses.every((s) => s === "Concluida")) return "Concluida"
+      if (statuses.some((s) => s === "Planejada")) return "Planejada"
+      return "Cancelada"
+    }
+
+    const sorted = Array.from(grupos.entries()).map(([cicloId, lista]) => {
+      const viagensOrdenadas = [...lista].sort((a, b) => {
+        const aTs = new Date(a.data_inicio || a.created_at).getTime()
+        const bTs = new Date(b.data_inicio || b.created_at).getTime()
+        return bTs - aTs
+      })
+      const viagemDestaque =
+        viagensOrdenadas.find((item) => normalizeViagemStatus(item.status) === "Em andamento") ||
+        viagensOrdenadas.find((item) => normalizeViagemStatus(item.status) === "Planejada") ||
+        viagensOrdenadas[0]
+
+      return {
+        cicloId,
+        viagens: viagensOrdenadas,
+        viagemDestaque,
+        statusCiclo: getStatusCiclo(viagensOrdenadas),
+        valorTotal: viagensOrdenadas.reduce((sum, item) => sum + Number(item.valor_frete || 0), 0),
+        kmTotal: viagensOrdenadas.reduce((sum, item) => sum + Number(item.km_real || 0), 0),
+      }
+    })
+
+    return sorted.sort((a, b) => {
+      const aTs = new Date(a.viagemDestaque.data_inicio || a.viagemDestaque.created_at).getTime()
+      const bTs = new Date(b.viagemDestaque.data_inicio || b.viagemDestaque.created_at).getTime()
+      return bTs - aTs
+    })
+  }, [viagens])
+
+  const ciclosFiltrados = ciclosResumo.filter((ciclo) => {
+    const termo = search.toLowerCase()
+    const matchesSearch =
+      ciclo.cicloId.toLowerCase().includes(termo) ||
+      ciclo.viagens.some((v) =>
+        v.cliente?.nome?.toLowerCase().includes(termo) ||
+        v.motorista?.nome?.toLowerCase().includes(termo) ||
+        v.veiculo?.placa_cavalo?.toLowerCase().includes(termo) ||
+        v.origem_real?.toLowerCase().includes(termo) ||
+        v.destino_real?.toLowerCase().includes(termo),
+      )
+
     if (activeTab === "todas") return matchesSearch
-    if (activeTab === "planejadas") return matchesSearch && status === "Planejada"
-    if (activeTab === "em_andamento") return matchesSearch && status === "Em andamento"
-    if (activeTab === "concluidas") return matchesSearch && status === "Concluida"
+    if (activeTab === "planejadas") return matchesSearch && ciclo.statusCiclo === "Planejada"
+    if (activeTab === "em_andamento") return matchesSearch && ciclo.statusCiclo === "Em andamento"
+    if (activeTab === "concluidas") return matchesSearch && ciclo.statusCiclo === "Concluida"
     return matchesSearch
   })
 
@@ -605,7 +739,7 @@ export function ViagensClient({
         </div>
         <Button onClick={handleAdd}>
           <Plus className="h-4 w-4 mr-2" />
-          Nova Viagem
+          Novo Ciclo
         </Button>
       </div>
 
@@ -625,18 +759,20 @@ export function ViagensClient({
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="todas">Todas ({viagens.length})</TabsTrigger>
-          <TabsTrigger value="planejadas">Planejadas ({viagens.filter(v => normalizeViagemStatus(v.status) === "Planejada").length})</TabsTrigger>
-          <TabsTrigger value="em_andamento">Em Andamento ({viagens.filter(v => normalizeViagemStatus(v.status) === "Em andamento").length})</TabsTrigger>
-          <TabsTrigger value="concluidas">Concluidas ({viagens.filter(v => normalizeViagemStatus(v.status) === "Concluida").length})</TabsTrigger>
+          <TabsTrigger value="todas">Todas ({ciclosResumo.length})</TabsTrigger>
+          <TabsTrigger value="planejadas">Planejadas ({ciclosResumo.filter(c => c.statusCiclo === "Planejada").length})</TabsTrigger>
+          <TabsTrigger value="em_andamento">Em Andamento ({ciclosResumo.filter(c => c.statusCiclo === "Em andamento").length})</TabsTrigger>
+          <TabsTrigger value="concluidas">Concluidas ({ciclosResumo.filter(c => c.statusCiclo === "Concluida").length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-4">
-          {filteredViagens.length > 0 ? (
+          {ciclosFiltrados.length > 0 ? (
             <div className="grid gap-4">
-              {filteredViagens.map((viagem) => (
+              {ciclosFiltrados.map((ciclo) => {
+                const viagem = ciclo.viagemDestaque
+                return (
                 <Card
-                  key={viagem.id}
+                  key={ciclo.cicloId}
                   role="button"
                   tabIndex={0}
                   onClick={() => handleOpenCockpitModal(viagem.id)}
@@ -664,9 +800,11 @@ export function ViagensClient({
                             <span className="font-medium text-foreground">
                               {viagem.destino_real || "Destino"}
                             </span>
-                            <Badge className={statusColors[normalizeViagemStatus(viagem.status)]}>
-                              {normalizeViagemStatus(viagem.status)}
+                            <Badge className={statusColors[ciclo.statusCiclo]}>
+                              {ciclo.statusCiclo}
                             </Badge>
+                            <Badge variant="outline">{ciclo.cicloId}</Badge>
+                            <Badge variant="outline">{ciclo.viagens.length} viagem(ns)</Badge>
                           </div>
                           {formatPontosIntermediarios(viagem.rota?.pontos_intermediarios) && (
                             <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
@@ -698,10 +836,10 @@ export function ViagensClient({
                         <div className="text-right">
                           <p className="font-semibold text-foreground flex items-center gap-1 justify-end">
                             <DollarSign className="h-4 w-4 text-success" />
-                            {formatCurrency(viagem.valor_frete || 0)}
+                            {formatCurrency(ciclo.valorTotal)}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            {viagem.km_real ? `${viagem.km_real.toLocaleString("pt-BR")} km` : "-"}
+                            {ciclo.kmTotal ? `${ciclo.kmTotal.toLocaleString("pt-BR")} km` : "-"}
                           </p>
                         </div>
                         <DropdownMenu>
@@ -754,7 +892,8 @@ export function ViagensClient({
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <Card className="border-border/50">
@@ -817,7 +956,7 @@ export function ViagensClient({
         <DialogContent className="w-[95vw] max-w-4xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {selectedViagem ? "Editar Viagem" : "Nova Viagem"}
+              {selectedViagem ? "Editar Viagem" : "Novo Ciclo"}
             </DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -838,6 +977,17 @@ export function ViagensClient({
 
             {/* Cliente + Status */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid gap-2 md:col-span-2">
+                <Label>ID do Ciclo</Label>
+                <Input
+                  value={formData.ciclo_id}
+                  onChange={(e) => setFormData({ ...formData, ciclo_id: e.target.value })}
+                  placeholder="Ex: CIC-2026-0001"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use o mesmo ID em várias viagens para agrupá-las no mesmo ciclo.
+                </p>
+              </div>
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
                   <Label>Cliente</Label>

@@ -87,6 +87,7 @@ export interface PontoIntermediario {
   cidade: string
   estado: string
   km?: number | null
+  tempo_trecho_horas?: number | null
   tipo_parada?: PontoParadaTipo
   observacao?: string
 }
@@ -127,6 +128,7 @@ export type EventoViagemTipo =
   | 'pedagio'
   | 'parada'
   | 'espera'
+  | 'nova_viagem'
 
 export type EventoViagemStatus = 'concluido' | 'em_andamento' | 'pendente' | 'atrasado'
 
@@ -165,6 +167,9 @@ export interface Rota {
 export interface Viagem {
   id: string
   user_id: string
+  ciclo_id?: string | null
+  viagem_pai_id?: string | null
+  fechamento_evento_id?: string | null
   data_inicio: string | null
   data_fim: string | null
   cliente_id: string | null

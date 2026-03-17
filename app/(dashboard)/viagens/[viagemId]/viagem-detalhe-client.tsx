@@ -59,6 +59,7 @@ interface ViagemDetalheClientProps {
   initialReceitas: ReceitaViagem[]
   initialDocumentos: ViagemDocumento[]
   etaParametros: EtaParametro[]
+  initialSubViagens?: Viagem[]
   embedded?: boolean
 }
 
@@ -99,18 +100,36 @@ type CockpitQuickAction = {
   title: string
 }
 
+type EventoCicloTableRow = {
+  id: string
+  kind: "evento" | "resumo_fechamento"
+  ordem: string
+  modo: "realizado" | "planejado"
+  tipo: string
+  local: string
+  inicio: string
+  fim: string
+  duracao: string
+  status: string
+  source: ViagemEvento | null
+}
+
 type MarcoOperacionalTipo = "saida" | "chegada" | "passagem"
 const PASSAGEM_OUTRO_PONTO_VALUE = "__outro_ponto__"
+
+function getFechamentoEventoStorageKey(viagemId: string) {
+  return `tms:viagem:${viagemId}:fechamento_evento_id`
+}
 
 const cockpitQuickActions: CockpitQuickAction[] = [
   { label: "Chegada", type: "chegada", status: "concluido", title: "Chegada" },
   { label: "Saída", type: "saida", status: "concluido", title: "Saída" },
-  { label: "Iniciar Carreg.", type: "parada", status: "em_andamento", title: "Início de carregamento" },
-  { label: "Finalizar Carreg.", type: "parada", status: "concluido", title: "Fim de carregamento" },
-  { label: "Iniciar Descanso", type: "parada", status: "em_andamento", title: "Início de descanso" },
-  { label: "Finalizar Descanso", type: "parada", status: "concluido", title: "Fim de descanso" },
+  { label: "Iniciar carregamento", type: "parada", status: "em_andamento", title: "Início de carregamento" },
+  { label: "Finalizar carregamento", type: "parada", status: "concluido", title: "Fim de carregamento" },
+  { label: "Iniciar descanso", type: "parada", status: "em_andamento", title: "Início de descanso" },
+  { label: "Finalizar descanso", type: "parada", status: "concluido", title: "Fim de descanso" },
   { label: "Abastecimento", type: "abastecimento", status: "concluido", title: "Abastecimento" },
-  { label: "Manutenção", type: "parada", status: "pendente", title: "Manutenção" },
+  { label: "Manutenção (ocorrência)", type: "parada", status: "pendente", title: "Manutenção" },
   { label: "Documentação", type: "ocorrencia", status: "pendente", title: "Documentação" },
   { label: "Ocorrência", type: "ocorrencia", status: "pendente", title: "Ocorrência" },
 ]
@@ -127,6 +146,7 @@ const eventTypeLabels: Record<EventoViagemTipo, string> = {
   pedagio: "Pedágio",
   parada: "Parada",
   espera: "Espera",
+  nova_viagem: "Nova viagem",
 }
 
 const eventStatusLabel: Record<EventoViagemStatus, string> = {
@@ -223,7 +243,18 @@ function normalizeCategoria(categoria?: string | null): CustoViagem["categoria"]
 
 function normalizeViagemStatus(status?: string | null) {
   if (!status) return "Planejada"
-  if (status === "Concluída") return "Concluida"
+
+  const normalized = status
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim()
+
+  if (["concluida", "fechada", "fechado", "finalizada", "encerrada"].includes(normalized)) return "Concluida"
+  if (["em andamento", "andamento", "aberta", "aberto", "em_execucao", "executando"].includes(normalized)) return "Em andamento"
+  if (["planejada", "planejado"].includes(normalized)) return "Planejada"
+  if (["cancelada", "cancelado"].includes(normalized)) return "Cancelada"
+
   return status
 }
 
@@ -263,6 +294,11 @@ function isMissingViagemEventosTableError(errorMessage: string, errorCode?: stri
   )
 }
 
+function isEventoPlanejado(evento: ViagemEvento) {
+  const payload = (evento.payload || {}) as Record<string, unknown>
+  return payload.lancamento_modo === "planejado" || payload.planejado === true
+}
+
 function createLocalEventId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `local-${crypto.randomUUID()}`
@@ -278,6 +314,7 @@ export function ViagemDetalheClient({
   initialReceitas,
   initialDocumentos,
   etaParametros,
+  initialSubViagens = [],
   embedded = false,
 }: ViagemDetalheClientProps) {
   const supabase = createClient()
@@ -287,17 +324,41 @@ export function ViagemDetalheClient({
   const [receitas, setReceitas] = useState(initialReceitas)
   const [documentos, setDocumentos] = useState(initialDocumentos)
   const [viagemState, setViagemState] = useState(viagem)
+  const [subViagensCarregadas, setSubViagensCarregadas] = useState(initialSubViagens)
+  const [subViagemAtivaId, setSubViagemAtivaId] = useState<string | null>(null)
+  const [viagensIrmasDosCiclo, setViagensIrmasDosCiclo] = useState<Viagem[]>([])
   const [loading, setLoading] = useState(false)
   const [usingLocalEventosFallback, setUsingLocalEventosFallback] = useState(false)
 
   const [eventModalOpen, setEventModalOpen] = useState(false)
   const [activeTimelineEvent, setActiveTimelineEvent] = useState<ViagemEvento | null>(null)
   const [timelineRealModalOpen, setTimelineRealModalOpen] = useState(false)
+  const [timelinePlanejadoModalOpen, setTimelinePlanejadoModalOpen] = useState(false)
+  const [eventoLancamentoModo, setEventoLancamentoModo] = useState<"realizado" | "planejado">("realizado")
   const [expandedTimelinePointId, setExpandedTimelinePointId] = useState<string | null>(null)
   const [costModalOpen, setCostModalOpen] = useState(false)
   const [receitaModalOpen, setReceitaModalOpen] = useState(false)
   const [docModalOpen, setDocModalOpen] = useState(false)
+  const [eventosCicloExpandido, setEventosCicloExpandido] = useState(false)
+  const [expandedViagensIds, setExpandedViagensIds] = useState<Set<string>>(new Set())
+  const [finalizarViagemModalOpen, setFinalizarViagemModalOpen] = useState(false)
+  const [finalizacaoTipoModalOpen, setFinalizacaoTipoModalOpen] = useState(false)
+  const [finalizacaoTipo, setFinalizacaoTipo] = useState<"viagem" | "ciclo">("viagem")
+  const [finalizarViagemEventoId, setFinalizarViagemEventoId] = useState("")
+  const [operacaoViagemModalOpen, setOperacaoViagemModalOpen] = useState(false)
+  const [operacaoViagemTipo, setOperacaoViagemTipo] = useState<"fechar" | "reabrir">("fechar")
+  const [viagemOperacaoId, setViagemOperacaoId] = useState("")
+  const [eventoViagemAlvoId, setEventoViagemAlvoId] = useState<string | null>(null)
+  const [registroViagemSelecionadaId, setRegistroViagemSelecionadaId] = useState("")
+  const [fecharSubViagemModalOpen, setFecharSubViagemModalOpen] = useState(false)
+  const [subViagemParaFecharId, setSubViagemParaFecharId] = useState<string | null>(null)
+  const [fechamentoEventoId, setFechamentoEventoId] = useState(() => {
+    if (viagem.fechamento_evento_id) return viagem.fechamento_evento_id
+    if (typeof window === "undefined") return ""
+    return window.localStorage.getItem(getFechamentoEventoStorageKey(viagem.id)) || ""
+  })
   const [saldoInicialLitros, setSaldoInicialLitros] = useState("300")
+  const [dieselFinalLitros, setDieselFinalLitros] = useState("")
   const [consumoMedioEditavel, setConsumoMedioEditavel] = useState(() => Number(viagem.veiculo?.meta_consumo || 2.4))
   const [timeTicker, setTimeTicker] = useState(() => Date.now())
   const recalculateEtaInFlightRef = useRef(false)
@@ -316,13 +377,38 @@ export function ViagemDetalheClient({
   const [postosAbastecimento, setPostosAbastecimento] = useState<PostoAbastecimento[]>([])
   const [abastecimentoForm, setAbastecimentoForm] = useState({
     veiculo_id: viagem.veiculo_id || "",
+    posto_modo: "cadastrado" as "cadastrado" | "livre",
     posto_id: "",
     hodometro: "",
     litros: "",
     valor_total: "",
     posto: "",
     arla: "nao",
+    arla_litros: "",
     arla_valor: "",
+    ap_refrigerado: "nao",
+    ap_refrigerado_horimetro: "",
+    ap_refrigerado_litros: "",
+    ap_refrigerado_valor: "",
+  })
+  const [ocorrenciaForm, setOcorrenciaForm] = useState({
+    categoria: "operacional",
+    severidade: "media",
+    houve_parada: "nao",
+    tempo_parado_min: "",
+    acao_imediata: "",
+    responsavel_acao: "",
+    contato: "",
+    prazo_solucao: "",
+    protocolo: "",
+  })
+  const [documentacaoEventoForm, setDocumentacaoEventoForm] = useState({
+    tipo_documento: "NF",
+    numero_documento: "",
+    emissor: "",
+    validade_documento: "",
+    status_documento: "pendente",
+    protocolo_documento: "",
   })
 
   const [costForm, setCostForm] = useState<CostFormState>({
@@ -356,6 +442,17 @@ export function ViagemDetalheClient({
       partida_real: toDatetimeLocal(item.partida_real || null),
     })),
   }))
+  const [timelinePlanejado, setTimelinePlanejado] = useState(() => ({
+    origem_partida_planejada: toDatetimeLocal(viagem.planejamento_rota?.origem_partida_planejada || viagem.data_inicio || null),
+    destino_chegada_planejada: toDatetimeLocal(viagem.planejamento_rota?.destino_chegada_planejada || viagem.data_fim || null),
+    intermediarios: (viagem.planejamento_rota?.intermediarios || []).map((item) => ({
+      chave: item.chave,
+      cidade: item.cidade,
+      estado: item.estado,
+      chegada_planejada: toDatetimeLocal(item.chegada_planejada || null),
+      partida_planejada: toDatetimeLocal(item.partida_planejada || null),
+    })),
+  }))
 
   useEffect(() => {
     setTimelineReal({
@@ -370,6 +467,20 @@ export function ViagemDetalheClient({
       })),
     })
   }, [viagemState.planejamento_rota])
+
+  useEffect(() => {
+    setTimelinePlanejado({
+      origem_partida_planejada: toDatetimeLocal(viagemState.planejamento_rota?.origem_partida_planejada || viagemState.data_inicio || null),
+      destino_chegada_planejada: toDatetimeLocal(viagemState.planejamento_rota?.destino_chegada_planejada || viagemState.data_fim || null),
+      intermediarios: (viagemState.planejamento_rota?.intermediarios || []).map((item) => ({
+        chave: item.chave,
+        cidade: item.cidade,
+        estado: item.estado,
+        chegada_planejada: toDatetimeLocal(item.chegada_planejada || null),
+        partida_planejada: toDatetimeLocal(item.partida_planejada || null),
+      })),
+    })
+  }, [viagemState.data_fim, viagemState.data_inicio, viagemState.planejamento_rota])
 
   useEffect(() => {
     if (initialEventos.length > 0) return
@@ -404,9 +515,153 @@ export function ViagemDetalheClient({
     return () => window.clearInterval(intervalId)
   }, [])
 
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const storageKey = getFechamentoEventoStorageKey(viagemState.id)
+    if (fechamentoEventoId) {
+      window.localStorage.setItem(storageKey, fechamentoEventoId)
+      return
+    }
+
+    window.localStorage.removeItem(storageKey)
+  }, [fechamentoEventoId, viagemState.id])
+
+  useEffect(() => {
+    if (!subViagemAtivaId) return
+
+    const carregarEventosSubViagem = async () => {
+      const { data, error } = await supabase
+        .from("viagem_eventos")
+        .select("*")
+        .eq("viagem_id", subViagemAtivaId)
+        .order("ocorrido_em", { ascending: false })
+
+      if (!error && data) {
+        setEventos(data)
+      }
+    }
+
+    carregarEventosSubViagem()
+  }, [subViagemAtivaId, supabase])
+
+  useEffect(() => {
+    if (subViagemAtivaId) return
+    if ((subViagensCarregadas || []).length === 0) return
+
+    void refreshEventos()
+  }, [subViagemAtivaId, subViagensCarregadas])
+
+  // Reset formulários ao trocar de sub-viagem
+  useEffect(() => {
+    if (!subViagemAtivaId) return
+
+    // Reset abastecimento
+    setAbastecimentoForm({
+      veiculo_id: viagem.veiculo_id || "",
+      posto_modo: "cadastrado",
+      posto_id: "",
+      hodometro: "",
+      litros: "",
+      valor_total: "",
+      posto: "",
+      arla: "nao",
+      arla_litros: "",
+      arla_valor: "",
+      ap_refrigerado: "nao",
+      ap_refrigerado_horimetro: "",
+      ap_refrigerado_litros: "",
+      ap_refrigerado_valor: "",
+    })
+
+    // Reset ocorrência
+    setOcorrenciaForm({
+      categoria: "operacional",
+      severidade: "media",
+      houve_parada: "nao",
+      tempo_parado_min: "",
+      acao_imediata: "",
+      responsavel_acao: "",
+      contato: "",
+      prazo_solucao: "",
+      protocolo: "",
+    })
+
+    // Reset documentação evento
+    setDocumentacaoEventoForm({
+      tipo_documento: "NF",
+      numero_documento: "",
+      emissor: "",
+      validade_documento: "",
+      status_documento: "pendente",
+      protocolo_documento: "",
+    })
+
+    // Reset custos
+    setCostForm({
+      data: new Date().toISOString().split("T")[0],
+      categoria: "Diesel",
+      valor: "",
+      observacao: "",
+    })
+
+    // Reset receitas
+    setReceitaForm({
+      data: new Date().toISOString().split("T")[0],
+      tipo: "Receita extra",
+      valor: "",
+      descricao: "",
+    })
+
+    // Reset documentos
+    setDocForm({
+      tipo_documento: "NF",
+      nome_arquivo: "",
+      observacao: "",
+    })
+    setSelectedDocFile(null)
+
+    // Reset evento geral
+    setEventForm({
+      tipo_evento: "chegada",
+      status_evento: "concluido",
+      titulo: "",
+      local: "",
+      observacao: "",
+      inicio_em: "",
+      fim_em: "",
+    })
+  }, [subViagemAtivaId])
+
+  useEffect(() => {
+    const carregarViagensIrmas = async () => {
+      if (!viagemState.ciclo_id) return
+
+      const { data, error } = await supabase
+        .from("viagens")
+        .select("id, status, data_fim")
+        .eq("ciclo_id", viagemState.ciclo_id)
+
+      if (!error && data) {
+        setViagensIrmasDosCiclo(data as Viagem[])
+      }
+    }
+
+    carregarViagensIrmas()
+  }, [viagemState.ciclo_id, viagemState.status, subViagensCarregadas, supabase])
+
+  useEffect(() => {
+    if (!eventModalOpen) {
+      setEventoViagemAlvoId(null)
+    }
+  }, [eventModalOpen])
+
+  const eventosPlanejados = useMemo(() => eventos.filter((evento) => isEventoPlanejado(evento)), [eventos])
+  const eventosRealizados = useMemo(() => eventos.filter((evento) => !isEventoPlanejado(evento)), [eventos])
+
   const eventosOrdenados = useMemo(
-    () => [...eventos].sort((a, b) => new Date(b.ocorrido_em).getTime() - new Date(a.ocorrido_em).getTime()),
-    [eventos],
+    () => [...eventosRealizados].sort((a, b) => new Date(b.ocorrido_em).getTime() - new Date(a.ocorrido_em).getTime()),
+    [eventosRealizados],
   )
 
   const custosTotal = useMemo(() => custos.reduce((sum, item) => sum + Number(item.valor || 0), 0), [custos])
@@ -418,23 +673,23 @@ export function ViagemDetalheClient({
   const custoPorKm = Number(viagemState.km_real || 0) > 0 ? custosTotal / Number(viagemState.km_real) : 0
 
   const tempoTransitoHoras = useMemo(() => {
-    const chegada = eventos.filter((e) => e.tipo_evento === "chegada").length
-    const saida = eventos.filter((e) => e.tipo_evento === "saida").length
+    const chegada = eventosRealizados.filter((e) => e.tipo_evento === "chegada").length
+    const saida = eventosRealizados.filter((e) => e.tipo_evento === "saida").length
     return Math.max(0, (chegada + saida) * 1.5)
-  }, [eventos])
+  }, [eventosRealizados])
 
   const tempoParadoHoras = useMemo(() => {
-    const tempo = eventos.reduce((sum, evento) => {
+    const tempo = eventosRealizados.reduce((sum, evento) => {
       if (["parada", "espera", "ocorrencia"].includes(evento.tipo_evento)) {
         return sum + Number(evento.impacto_minutos || 0)
       }
       return sum
     }, 0)
     return tempo / 60
-  }, [eventos])
+  }, [eventosRealizados])
 
   const abastecimentosResumo = useMemo(() => {
-    const abastecimentos = eventos.filter((e) => e.tipo_evento === "abastecimento")
+    const abastecimentos = eventosRealizados.filter((e) => e.tipo_evento === "abastecimento")
     return {
       qtd: abastecimentos.length,
       litros: abastecimentos.reduce((sum, e) => sum + Number((e.payload as any)?.litros || 0), 0),
@@ -442,7 +697,7 @@ export function ViagemDetalheClient({
         .filter((c) => normalizeCategoria(c.categoria) === "Diesel")
         .reduce((sum, c) => sum + Number(c.valor || 0), 0),
     }
-  }, [custos, eventos])
+  }, [custos, eventosRealizados])
 
   const custosPorCategoria = useMemo(() => {
     const total = custos.reduce((sum, item) => sum + Number(item.valor || 0), 0)
@@ -475,12 +730,136 @@ export function ViagemDetalheClient({
     return (new Date(finalDate).getTime() - new Date(viagemState.data_inicio).getTime()) / 3600000
   }, [timeTicker, viagemState.data_fim, viagemState.data_inicio, viagemState.status])
 
-  const statusNormalizado = normalizeViagemStatus(viagemState.status)
+  const subViagemAtiva = useMemo(
+    () => (subViagemAtivaId ? subViagensCarregadas.find((item) => item.id === subViagemAtivaId) || null : null),
+    [subViagemAtivaId, subViagensCarregadas],
+  )
+  const viagensDoCiclo = useMemo(() => {
+    const base = [
+      viagemState,
+      ...(subViagensCarregadas || []),
+      ...(viagensIrmasDosCiclo || []),
+    ]
+    const unique = new Map<string, Viagem>()
+
+    base.forEach((item) => {
+      if (!item?.id) return
+      const existente = unique.get(item.id)
+      unique.set(item.id, { ...(existente || {}), ...(item as Viagem) })
+    })
+
+    return Array.from(unique.values())
+  }, [viagemState, subViagensCarregadas, viagensIrmasDosCiclo])
+  const viagensAbertas = useMemo(
+    () => viagensDoCiclo.filter((item) => normalizeViagemStatus(item.status as Viagem["status"]) !== "Concluida"),
+    [viagensDoCiclo],
+  )
+  const viagensFechadas = useMemo(
+    () => viagensDoCiclo.filter((item) => normalizeViagemStatus(item.status as Viagem["status"]) === "Concluida"),
+    [viagensDoCiclo],
+  )
+  const idsViagemNosEventos = useMemo(() => {
+    const ids = new Set<string>()
+    eventos.forEach((evento) => {
+      if (evento.viagem_id) ids.add(evento.viagem_id)
+    })
+    return Array.from(ids)
+  }, [eventos])
+  const sequenciaViagemPorId = useMemo(() => {
+    const mapa = new Map<string, string>()
+    const eventosOrdenadosAsc = [...eventos].sort(
+      (a, b) => new Date(a.ocorrido_em).getTime() - new Date(b.ocorrido_em).getTime(),
+    )
+
+    let contador = 1
+    eventosOrdenadosAsc.forEach((evento) => {
+      const viagemId = evento.viagem_id
+      if (!viagemId || mapa.has(viagemId)) return
+      mapa.set(viagemId, String(contador).padStart(2, "0"))
+      contador += 1
+    })
+
+    return mapa
+  }, [eventos])
+  const opcoesViagemRegistros = useMemo(() => {
+    const mapaViagens = new Map<string, Viagem>()
+    viagensDoCiclo.forEach((item) => mapaViagens.set(item.id, item))
+
+    const idsUnificados = new Set<string>([
+      ...viagensDoCiclo.map((item) => item.id),
+      ...idsViagemNosEventos,
+    ])
+
+    return Array.from(idsUnificados).map((id) => {
+      const viagem = mapaViagens.get(id)
+      const status = normalizeViagemStatus(viagem?.status || null)
+      const placa = viagem?.veiculo?.placa_cavalo || "sem-veiculo"
+      const sequencia = sequenciaViagemPorId.get(id) || "--"
+      return {
+        id,
+        status,
+        placa,
+        sequencia,
+        isPrincipal: id === viagemState.id,
+      }
+    })
+  }, [idsViagemNosEventos, sequenciaViagemPorId, viagemState.id, viagensDoCiclo])
+  const opcoesViagemAbertasRegistros = useMemo(
+    () => opcoesViagemRegistros.filter((item) => item.status !== "Concluida"),
+    [opcoesViagemRegistros],
+  )
+  const opcoesFecharViagem = useMemo(
+    () => opcoesViagemRegistros.filter((item) => item.status !== "Concluida"),
+    [opcoesViagemRegistros],
+  )
+  const opcoesReabrirViagem = useMemo(
+    () => opcoesViagemRegistros.filter((item) => item.status === "Concluida"),
+    [opcoesViagemRegistros],
+  )
+  const viagemAbertaPreferencialId = useMemo(() => {
+    const subAberta = (subViagensCarregadas || []).find(
+      (item) => normalizeViagemStatus(item.status as Viagem["status"]) !== "Concluida",
+    )
+    if (subAberta?.id) return subAberta.id
+
+    if (normalizeViagemStatus(viagemState.status as Viagem["status"]) !== "Concluida") {
+      return viagemState.id
+    }
+
+    return viagensAbertas[0]?.id || viagemState.id
+  }, [subViagensCarregadas, viagemState.id, viagemState.status, viagensAbertas])
+  const viagemRegistroAlvoId = useMemo(
+    () => registroViagemSelecionadaId || viagemAbertaPreferencialId,
+    [registroViagemSelecionadaId, viagemAbertaPreferencialId],
+  )
+  const temViagemAbertaParaRegistro = opcoesViagemAbertasRegistros.length > 0
+  const statusFechamentoPorViagemId = useMemo(() => {
+    const mapa = new Map<string, boolean>()
+    viagensDoCiclo.forEach((item) => {
+      mapa.set(item.id, normalizeViagemStatus(item.status as Viagem["status"]) === "Concluida")
+    })
+    return mapa
+  }, [viagensDoCiclo])
+
+  useEffect(() => {
+    const existeNaLista = opcoesViagemAbertasRegistros.some((item) => item.id === registroViagemSelecionadaId)
+    if (existeNaLista) return
+
+    setRegistroViagemSelecionadaId(opcoesViagemAbertasRegistros[0]?.id || "")
+  }, [opcoesViagemAbertasRegistros, registroViagemSelecionadaId])
+  const viagemAlvoId = subViagemAtiva?.id || viagemState.id
+  const statusNormalizado = normalizeViagemStatus((subViagemAtiva?.status || viagemState.status) as Viagem["status"])
+  const viagemFechada = statusNormalizado === "Concluida"
+  
+  const cicloFechado = useMemo(() => {
+    if (viagensDoCiclo.length <= 1) return false
+    return viagensDoCiclo.every((v) => normalizeViagemStatus(v.status) === "Concluida")
+  }, [viagensDoCiclo])
 
   const faseOperacional = useMemo(() => {
     if (statusNormalizado === "Planejada") return "Pré-operação"
-    if (statusNormalizado === "Em andamento") return "Em trânsito"
-    if (statusNormalizado === "Concluida") return "Encerramento"
+    if (statusNormalizado === "Em andamento") return "Em execução"
+    if (statusNormalizado === "Concluida") return "Fechado"
     return "Cancelada"
   }, [statusNormalizado])
 
@@ -488,12 +867,12 @@ export function ViagemDetalheClient({
 
   const proximoMarcoPrevisto = useMemo(() => {
     const agora = timeTicker
-    return eventos
+    return eventosRealizados
       .filter((evento) => !!evento.previsto_em)
       .map((evento) => ({ ...evento, previstoTs: new Date(evento.previsto_em as string).getTime() }))
       .filter((evento) => evento.previstoTs >= agora)
       .sort((a, b) => a.previstoTs - b.previstoTs)[0] || null
-  }, [eventos, timeTicker])
+  }, [eventosRealizados, timeTicker])
 
   const kmPlanejado = Number(viagemState.rota?.km_planejado || 0)
   const kmReal = Number(viagemState.km_real || 0)
@@ -518,15 +897,15 @@ export function ViagemDetalheClient({
 
     if (statusNormalizado === "Planejada") {
       acoes.push("Confirmar motorista, veículo e documentação antes da saída.")
-      acoes.push("Registrar evento de saída para iniciar o rastreio operacional.")
+      acoes.push("Lançar evento de saída para iniciar o rastreio operacional.")
     }
 
     if (statusNormalizado === "Em andamento") {
       if (!viagemState.eta_destino_em) {
-        acoes.push("Recalcular ETA para atualizar previsão de chegada ao destino.")
+        acoes.push("Recalcular ETA para atualizar previsão destino.")
       }
       if (possuiAbastecimentoPlanejado && eventosAbastecimento === 0) {
-        acoes.push("Rota prevê abastecimento: registrar evento ao realizar a parada planejada.")
+        acoes.push("Rota prevê abastecimento: lançar evento ao realizar a parada planejada.")
       }
       if (possuiDescargaPlanejada && !eventos.some((evento) => evento.tipo_evento === "chegada")) {
         acoes.push("Rota prevê descarga intermediária: atualizar marcos de chegada/saída nos pontos de entrega.")
@@ -731,6 +1110,52 @@ export function ViagemDetalheClient({
     return Math.max(0, Math.round(kmPlanejado - ultimoKmConcluido))
   }, [kmPlanejado, percursoPlanejado, viagemState.km_restante])
 
+  const atrasoPorPontos = useMemo(() => {
+    return percursoPlanejado
+      .map((ponto) => {
+        const previstoEm = ponto.tipo === "origem" ? ponto.partidaPlanejada || null : ponto.chegadaPlanejada || null
+        const realizadoEm = ponto.tipo === "origem" ? ponto.partidaReal || null : ponto.chegadaReal || null
+
+        if (!previstoEm) {
+          return {
+            id: ponto.id,
+            label: ponto.label,
+            previstoEm: null as string | null,
+            realizadoEm,
+            atrasoMin: null as number | null,
+          }
+        }
+
+        if (!realizadoEm) {
+          return {
+            id: ponto.id,
+            label: ponto.label,
+            previstoEm,
+            realizadoEm: null,
+            atrasoMin: null,
+          }
+        }
+
+        const atrasoMin = Math.round((new Date(realizadoEm).getTime() - new Date(previstoEm).getTime()) / 60000)
+
+        return {
+          id: ponto.id,
+          label: ponto.label,
+          previstoEm,
+          realizadoEm,
+          atrasoMin,
+        }
+      })
+      .filter((item) => item.previstoEm !== null)
+  }, [percursoPlanejado])
+
+  const atrasoAcumuladoPontosMin = useMemo(() => {
+    return atrasoPorPontos.reduce((sum, item) => {
+      if (item.atrasoMin === null) return sum
+      return sum + Math.max(0, item.atrasoMin)
+    }, 0)
+  }, [atrasoPorPontos])
+
   const progressoRotaPercent = useMemo(() => {
     if (kmPlanejado <= 0) return 0
     const perc = ((kmPlanejado - kmRestanteAutomatico) / kmPlanejado) * 100
@@ -777,6 +1202,11 @@ export function ViagemDetalheClient({
 
   const clienteNome = viagemState.cliente?.nome || "Sem cliente"
   const cicloLabel = viagemState.rota?.nome || `C-${viagemState.id.slice(0, 4).toUpperCase()}`
+  const cicloIdReferencia = useMemo(() => {
+    if (viagemState.ciclo_id?.trim()) return viagemState.ciclo_id.trim()
+    const year = new Date(viagemState.created_at || new Date().toISOString()).getFullYear()
+    return `CIC-${year}-${viagemState.id.slice(0, 8).toUpperCase()}`
+  }, [viagemState.ciclo_id, viagemState.created_at, viagemState.id])
   const viagemLabel = `V-${viagemState.id.slice(0, 6).toUpperCase()}`
   const origemOperacionalLabel =
     viagemState.origem_real ||
@@ -810,7 +1240,7 @@ export function ViagemDetalheClient({
   }, [viagemState.planejamento_rota?.intermediarios, viagemState.rota?.pontos_intermediarios])
 
   const pontosPassagemExtrasViagem = useMemo(() => {
-    const extras = eventos
+    const extras = eventosRealizados
       .filter((evento) => evento.titulo === "Passagem")
       .filter((evento) => {
         const payload = (evento.payload || {}) as Record<string, unknown>
@@ -820,7 +1250,7 @@ export function ViagemDetalheClient({
       .filter(Boolean)
 
     return Array.from(new Set(extras))
-  }, [eventos])
+  }, [eventosRealizados])
 
   const pontosPassagemOptions = useMemo(
     () => Array.from(new Set([...pontosIntermediariosRotaOptions, ...pontosPassagemExtrasViagem])),
@@ -847,44 +1277,149 @@ export function ViagemDetalheClient({
 
   const previsaoChegadaDestino = viagemState.eta_destino_em || chegadaPlanejadaDestino
 
-  const eventosCockpit = useMemo(() => {
+  const eventosCockpit = useMemo<EventoCicloTableRow[]>(() => {
     const toTipo = (evento: ViagemEvento) => {
       if (evento.titulo?.trim()) return evento.titulo
       return eventTypeLabels[evento.tipo_evento] || evento.tipo_evento
     }
 
-    const toStatus = (evento: ViagemEvento) => {
-      if (evento.status_evento === "concluido") return "Concluído"
-      if (evento.status_evento === "em_andamento") return "Em andamento"
-      if (evento.status_evento === "atrasado") return "Atrasado"
-      return "Pendente"
-    }
+    const eventosTabelaOrdenados = [...eventos].sort(
+      (a, b) => new Date(a.ocorrido_em).getTime() - new Date(b.ocorrido_em).getTime(),
+    )
 
-    return eventosOrdenados.map((evento, index) => ({
+    return eventosTabelaOrdenados.map((evento, index) => ({
       id: evento.id,
-      ordem: index + 1,
+      kind: "evento" as const,
+      ordem: String(index + 1),
+      modo: isEventoPlanejado(evento) ? "planejado" : "realizado",
       tipo: toTipo(evento),
       local: evento.local || "-",
       inicio: formatDateTime(evento.ocorrido_em),
       fim: formatDateTime(evento.previsto_em),
       duracao: formatDurationByUnit(Number(evento.impacto_minutos || 0)),
-      status: toStatus(evento),
+      status: isEventoPlanejado(evento) ? "Planejado" : "Realizado",
       source: evento,
     }))
-  }, [eventosOrdenados])
+  }, [eventos])
+
+  const eventosCicloTabela = eventosCockpit
+  const EVENTOS_COMPACTOS_QTD = 5
+  const fechamentoEventoIndex = useMemo(
+    () => (fechamentoEventoId ? eventosCicloTabela.findIndex((evento) => evento.id === fechamentoEventoId) : -1),
+    [eventosCicloTabela, fechamentoEventoId],
+  )
+  const fechamentoViagemLabel = useMemo(() => {
+    if (!fechamentoEventoId) return `FV-${viagemState.id.slice(0, 6).toUpperCase()}`
+    return `FV-${viagemState.id.slice(0, 4).toUpperCase()}-${fechamentoEventoId.slice(0, 4).toUpperCase()}`
+  }, [fechamentoEventoId, viagemState.id])
+  const resumoFechamentoRow = useMemo<EventoCicloTableRow | null>(() => {
+    if (fechamentoEventoIndex < 0) return null
+
+    const eventosAteFechamento = eventosCicloTabela.slice(0, fechamentoEventoIndex + 1)
+    if (eventosAteFechamento.length === 0) return null
+
+    const primeiroEvento = eventosAteFechamento[0]
+    const eventoFechamento = eventosAteFechamento[eventosAteFechamento.length - 1]
+
+    return {
+      id: `resumo-fechamento-${viagemState.id}`,
+      kind: "resumo_fechamento",
+      ordem: `1-${eventoFechamento.ordem}`,
+      modo: "realizado",
+      tipo: `Fechamento da viagem ${fechamentoViagemLabel}`,
+      local: eventoFechamento.local,
+      inicio: primeiroEvento.inicio,
+      fim: eventoFechamento.fim !== "-" ? eventoFechamento.fim : eventoFechamento.inicio,
+      duracao: `${eventosAteFechamento.length} etapa(s) compactadas`,
+      status: "Clique para expandir",
+      source: null,
+    }
+  }, [eventosCicloTabela, fechamentoEventoIndex, fechamentoViagemLabel, viagemState.id])
+  const eventosCicloVisiveis = useMemo(
+    () => {
+      if (!viagemFechada || eventosCicloExpandido) return eventosCicloTabela
+
+      if (resumoFechamentoRow && fechamentoEventoIndex >= 0) {
+        return [resumoFechamentoRow, ...eventosCicloTabela.slice(fechamentoEventoIndex + 1)]
+      }
+
+      return eventosCicloTabela.slice(-EVENTOS_COMPACTOS_QTD)
+    },
+    [EVENTOS_COMPACTOS_QTD, eventosCicloExpandido, eventosCicloTabela, fechamentoEventoIndex, resumoFechamentoRow, viagemFechada],
+  )
+  const eventosCompactadosOcultos = useMemo(() => {
+    if (!viagemFechada || eventosCicloExpandido) return 0
+    if (resumoFechamentoRow && fechamentoEventoIndex >= 0) return fechamentoEventoIndex
+    return Math.max(0, eventosCicloTabela.length - eventosCicloVisiveis.length)
+  }, [eventosCicloExpandido, eventosCicloTabela.length, eventosCicloVisiveis.length, fechamentoEventoIndex, resumoFechamentoRow, viagemFechada])
+
+  // Agrupar eventos por viagem_id
+  const eventosAgrupados = useMemo(() => {
+    const grupos = new Map<string, typeof eventosCicloTabela>()
+    
+    eventosCicloTabela.forEach((evento) => {
+      const viagemId = evento.source?.viagem_id
+      if (!viagemId) return
+      
+      if (!grupos.has(viagemId)) {
+        grupos.set(viagemId, [])
+      }
+      grupos.get(viagemId)!.push(evento)
+    })
+    
+    return Array.from(grupos.entries()).map(([viagemId, eventosViagem], index) => {
+      // Determinar fechamento pelo status real da viagem
+      const temFechamento = statusFechamentoPorViagemId.get(viagemId) ?? false
+      const contagem = eventosViagem.length
+      const primeiroEvento = eventosViagem[0]
+      const ultimoEvento = eventosViagem[eventosViagem.length - 1]
+      const sequencia = String(index + 1).padStart(2, "0")
+      
+      return {
+        viagemId,
+        sequencia,
+        temFechamento,
+        contagem,
+        primeiroEvento,
+        ultimoEvento,
+        eventosViagem,
+      }
+    })
+  }, [eventosCicloTabela, statusFechamentoPorViagemId])
+
+  const eventosVisiveisAgrupados = useMemo(() => {
+    const resultado: typeof eventosAgrupados = []
+    
+    eventosAgrupados.forEach((grupo) => {
+      const isExpandedGroup = expandedViagensIds.has(grupo.viagemId)
+
+      // Por padrão, toda viagem fica compactada por ID.
+      if (!isExpandedGroup) {
+        resultado.push({
+          ...grupo,
+          eventosViagem: [], // Vazio para não renderizar eventos individuais
+        })
+      } else {
+        // Expandida manualmente: mostrar todos os eventos da viagem.
+        resultado.push(grupo)
+      }
+    })
+    
+    return resultado
+  }, [eventosAgrupados, expandedViagensIds])
 
   const tempoCarregamentoPlanejadoMin = useMemo(
     () =>
-      eventos.reduce((sum, evento) => {
+      eventosRealizados.reduce((sum, evento) => {
         const titulo = (evento.titulo || "").toLowerCase()
         if (!titulo.includes("carreg")) return sum
         return sum + Math.max(0, Number(evento.impacto_minutos || 0))
       }, 0),
-    [eventos],
+    [eventosRealizados],
   )
 
   const tempoCarregamentoRealMin = useMemo(() => {
-    return eventos.reduce((sum, evento) => {
+    return eventosRealizados.reduce((sum, evento) => {
       const titulo = (evento.titulo || "").toLowerCase()
       if (!titulo.includes("carreg")) return sum
       if (evento.status_evento === "em_andamento") {
@@ -893,13 +1428,14 @@ export function ViagemDetalheClient({
       }
       return sum + Math.max(0, Number(evento.impacto_minutos || 0))
     }, 0)
-  }, [eventos, timeTicker])
+  }, [eventosRealizados, timeTicker])
 
   const tempoTotalParadoMin = useMemo(() => {
-    return eventos.reduce((sum, evento) => {
+    return eventosRealizados.reduce((sum, evento) => {
       const titulo = (evento.titulo || "").toLowerCase()
       const contaComoParado =
-        ["parada", "espera", "ocorrencia"].includes(evento.tipo_evento) ||
+        ["parada", "espera", "ocorrencia", "abastecimento"].includes(evento.tipo_evento) ||
+        titulo.includes("abastec") ||
         titulo.includes("fila") ||
         titulo.includes("descans")
 
@@ -912,7 +1448,37 @@ export function ViagemDetalheClient({
 
       return sum + Math.max(0, Number(evento.impacto_minutos || 0))
     }, 0)
-  }, [eventos, timeTicker])
+  }, [eventosRealizados, timeTicker])
+
+  const atrasoAcumuladoCicloMin = atrasoAcumuladoPontosMin
+
+  const tempoFilaMin = useMemo(() => {
+    return eventosRealizados.reduce((sum, evento) => {
+      const titulo = (evento.titulo || "").toLowerCase()
+      if (!titulo.includes("fila")) return sum
+
+      if (evento.status_evento === "em_andamento") {
+        const minutosAteAgora = Math.max(0, Math.round((timeTicker - new Date(evento.ocorrido_em).getTime()) / 60000))
+        return sum + minutosAteAgora
+      }
+
+      return sum + Math.max(0, Number(evento.impacto_minutos || 0))
+    }, 0)
+  }, [eventosRealizados, timeTicker])
+
+  const tempoDescansoMin = useMemo(() => {
+    return eventosRealizados.reduce((sum, evento) => {
+      const titulo = (evento.titulo || "").toLowerCase()
+      if (!titulo.includes("descans")) return sum
+
+      if (evento.status_evento === "em_andamento") {
+        const minutosAteAgora = Math.max(0, Math.round((timeTicker - new Date(evento.ocorrido_em).getTime()) / 60000))
+        return sum + minutosAteAgora
+      }
+
+      return sum + Math.max(0, Number(evento.impacto_minutos || 0))
+    }, 0)
+  }, [eventosRealizados, timeTicker])
 
   const consumoEstimadoLitros = useMemo(() => {
     if (kmPlanejado <= 0 || consumoMedioEditavel <= 0) return null
@@ -926,11 +1492,25 @@ export function ViagemDetalheClient({
     return saldoInicial + abastecimentosResumo.litros - consumoEstimadoLitros
   }, [abastecimentosResumo.litros, consumoEstimadoLitros, saldoInicialLitros])
 
+  const litrosConsumidosCiclo = useMemo(() => {
+    const saldoInicial = Number(saldoInicialLitros)
+    const saldoFinal = Number(dieselFinalLitros)
+    if (!Number.isFinite(saldoInicial) || !Number.isFinite(saldoFinal)) return null
+    return Math.max(0, saldoInicial + abastecimentosResumo.litros - saldoFinal)
+  }, [abastecimentosResumo.litros, dieselFinalLitros, saldoInicialLitros])
+
+  const kmTotalCiclo = kmReal > 0 ? kmReal : kmPercorrido
+
+  const kmPorLitroCiclo = useMemo(() => {
+    if (litrosConsumidosCiclo === null || litrosConsumidosCiclo <= 0 || kmTotalCiclo <= 0) return null
+    return kmTotalCiclo / litrosConsumidosCiclo
+  }, [kmTotalCiclo, litrosConsumidosCiclo])
+
   const pendenciasCockpit = useMemo(() => {
     const itens: string[] = []
 
-    const possuiSaidaOrigem = eventos.some((evento) => evento.tipo_evento === "saida")
-    const possuiChegadaDestino = eventos.some((evento) => evento.tipo_evento === "chegada")
+    const possuiSaidaOrigem = eventosRealizados.some((evento) => evento.tipo_evento === "saida")
+    const possuiChegadaDestino = eventosRealizados.some((evento) => evento.tipo_evento === "chegada")
 
     if (statusNormalizado !== "Planejada" && !possuiSaidaOrigem) {
       itens.push("Saída da origem ainda não registrada.")
@@ -958,7 +1538,7 @@ export function ViagemDetalheClient({
 
     return itens.slice(0, 4)
   }, [
-    eventos,
+    eventosRealizados,
     saldoAtualEstimadoLitros,
     statusNormalizado,
     tempoTotalParadoMin,
@@ -984,15 +1564,15 @@ export function ViagemDetalheClient({
         } as CockpitQuickAction,
       },
       {
-        label: carregamentoEmAndamento ? "Finalizar Carreg." : "Iniciar Carreg.",
+        label: carregamentoEmAndamento ? "Finalizar carregamento" : "Iniciar carregamento",
         action: findQuickActionByTitle(carregamentoEmAndamento ? "Fim de carregamento" : "Início de carregamento"),
       },
       {
-        label: descansoEmAndamento ? "Finalizar Descanso" : "Iniciar Descanso",
+        label: descansoEmAndamento ? "Finalizar descanso" : "Iniciar descanso",
         action: findQuickActionByTitle(descansoEmAndamento ? "Fim de descanso" : "Início de descanso"),
       },
       { label: "Abastecimento", action: findQuickActionByTitle("Abastecimento") },
-      { label: "Manutenção", action: findQuickActionByTitle("Manutenção") },
+      { label: "Manutenção (ocorrência)", action: findQuickActionByTitle("Manutenção") },
       { label: "Documentação", action: findQuickActionByTitle("Documentação") },
       { label: "Ocorrência", action: findQuickActionByTitle("Ocorrência") },
     ].filter((item): item is { label: string; action: CockpitQuickAction } => Boolean(item.action))
@@ -1132,6 +1712,78 @@ export function ViagemDetalheClient({
     })
   }
 
+  const updateTimelinePlanejadoIntermediario = (
+    index: number,
+    field: "chegada_planejada" | "partida_planejada",
+    value: string,
+  ) => {
+    setTimelinePlanejado((prev) => {
+      const intermediarios = [...prev.intermediarios]
+      const current = intermediarios[index]
+      if (!current) return prev
+
+      intermediarios[index] = {
+        ...current,
+        [field]: value,
+      }
+
+      return {
+        ...prev,
+        intermediarios,
+      }
+    })
+  }
+
+  const salvarTimelinePlanejada = async () => {
+    setLoading(true)
+
+    const planejamentoAtual = viagemState.planejamento_rota || {
+      origem_partida_planejada: null,
+      destino_chegada_planejada: null,
+      intermediarios: [],
+    }
+
+    const planejadosPorChave = new Map(
+      timelinePlanejado.intermediarios
+        .filter((item) => !!item.chave)
+        .map((item) => [item.chave, item]),
+    )
+
+    const intermediariosAtualizados = (planejamentoAtual.intermediarios || []).map((item, index) => {
+      const planejado = timelinePlanejado.intermediarios[index] || planejadosPorChave.get(item.chave)
+      return {
+        ...item,
+        chegada_planejada: toIsoOrNull(planejado?.chegada_planejada),
+        partida_planejada: toIsoOrNull(planejado?.partida_planejada),
+      }
+    })
+
+    const planejamentoAtualizado = {
+      ...planejamentoAtual,
+      origem_partida_planejada: toIsoOrNull(timelinePlanejado.origem_partida_planejada),
+      destino_chegada_planejada: toIsoOrNull(timelinePlanejado.destino_chegada_planejada),
+      intermediarios: intermediariosAtualizados,
+    }
+
+    const { error } = await supabase
+      .from("viagens")
+      .update({
+        planejamento_rota: planejamentoAtualizado,
+      })
+      .eq("id", viagemState.id)
+
+    if (!error) {
+      setViagemState((prev) => ({
+        ...prev,
+        planejamento_rota: planejamentoAtualizado,
+      }))
+
+      await recalculateEta()
+    }
+
+    setLoading(false)
+  }
+
   const salvarTimelineReal = async () => {
     setLoading(true)
 
@@ -1187,7 +1839,11 @@ export function ViagemDetalheClient({
   }
 
   const openNewEventModal = (type: EventoViagemTipo) => {
+    const alvoId = viagemRegistroAlvoId
+    if (!alvoId) return
+    setEventoViagemAlvoId(alvoId)
     setActiveTimelineEvent(null)
+    setEventoLancamentoModo("realizado")
     const nowLocal = toDatetimeLocal(new Date().toISOString())
     setEventForm({
       tipo_evento: type,
@@ -1198,14 +1854,57 @@ export function ViagemDetalheClient({
       inicio_em: nowLocal,
       fim_em: nowLocal,
     })
+    if (type === "abastecimento") {
+      setAbastecimentoForm({
+        veiculo_id: viagemState.veiculo_id || "",
+        posto_modo: "cadastrado",
+        posto_id: "",
+        hodometro: "",
+        litros: "",
+        valor_total: "",
+        posto: "",
+        arla: "nao",
+        arla_litros: "",
+        arla_valor: "",
+        ap_refrigerado: "nao",
+        ap_refrigerado_horimetro: "",
+        ap_refrigerado_litros: "",
+        ap_refrigerado_valor: "",
+      })
+    }
+    if (type === "ocorrencia") {
+      setOcorrenciaForm({
+        categoria: "operacional",
+        severidade: "media",
+        houve_parada: "nao",
+        tempo_parado_min: "",
+        acao_imediata: "",
+        responsavel_acao: "",
+        contato: "",
+        prazo_solucao: "",
+        protocolo: "",
+      })
+      setDocumentacaoEventoForm({
+        tipo_documento: "NF",
+        numero_documento: "",
+        emissor: "",
+        validade_documento: "",
+        status_documento: "pendente",
+        protocolo_documento: "",
+      })
+    }
     setEventModalOpen(true)
   }
 
   const refreshEventos = async () => {
+    const idsViagens = subViagemAtivaId
+      ? [subViagemAtivaId]
+      : Array.from(new Set([viagemState.id, ...(subViagensCarregadas || []).map((item) => item.id)]))
+
     const { data, error } = await supabase
       .from("viagem_eventos")
       .select("*")
-      .eq("viagem_id", viagemState.id)
+      .in("viagem_id", idsViagens)
       .order("ocorrido_em", { ascending: false })
 
     if (!error && data) {
@@ -1215,10 +1914,33 @@ export function ViagemDetalheClient({
     }
 
     if (error && isMissingViagemEventosTableError(error.message, error.code)) {
-      const localEventos = readLocalEventos(viagemState.id)
+      const localEventos = idsViagens.flatMap((id) => readLocalEventos(id))
       setEventos(localEventos)
       setUsingLocalEventosFallback(true)
     }
+  }
+
+  const carregarEventosDaViagem = async (viagemId: string) => {
+    const { data, error } = await supabase
+      .from("viagem_eventos")
+      .select("*")
+      .eq("viagem_id", viagemId)
+      .order("ocorrido_em", { ascending: false })
+
+    if (!error && data) {
+      setEventos(data as ViagemEvento[])
+      setUsingLocalEventosFallback(false)
+      return data as ViagemEvento[]
+    }
+
+    if (error && isMissingViagemEventosTableError(error.message, error.code)) {
+      const localEventos = readLocalEventos(viagemId)
+      setEventos(localEventos)
+      setUsingLocalEventosFallback(true)
+      return localEventos
+    }
+
+    return [] as ViagemEvento[]
   }
 
   const getEventoSaveErrorMessage = (errorMessage: string, errorCode?: string) => {
@@ -1231,7 +1953,10 @@ export function ViagemDetalheClient({
     return errorMessage
   }
 
-  const handleQuickActionRegister = (action: CockpitQuickAction) => {
+  const handleQuickActionRegister = (action: CockpitQuickAction, modo: "realizado" | "planejado") => {
+    const alvoId = viagemRegistroAlvoId
+    if (!alvoId) return
+    setEventoViagemAlvoId(alvoId)
     const nowLocal = toDatetimeLocal(new Date().toISOString())
     const localPadrao =
       ultimoMarco?.local ||
@@ -1241,25 +1966,53 @@ export function ViagemDetalheClient({
     const isPartidaChegadaAction = action.title === "Partida e chegada"
 
     setActiveTimelineEvent(null)
+    setEventoLancamentoModo(modo)
     setEventForm({
       tipo_evento: isPartidaChegadaAction ? "saida" : action.type,
-      status_evento: "concluido",
+      status_evento: modo === "planejado" ? "pendente" : "concluido",
       titulo: isPartidaChegadaAction ? "Saída" : action.title,
       local: isPartidaChegadaAction ? origemOperacionalLabel : localPadrao,
-      observacao: "Registrado por ação rápida.",
+      observacao: modo === "planejado" ? "Planejado por ação rápida." : "Registrado por ação rápida.",
       inicio_em: nowLocal,
       fim_em: nowLocal,
     })
     if (action.type === "abastecimento") {
       setAbastecimentoForm({
         veiculo_id: viagemState.veiculo_id || "",
+        posto_modo: "cadastrado",
         posto_id: "",
         hodometro: "",
         litros: "",
         valor_total: "",
         posto: localPadrao,
         arla: "nao",
+        arla_litros: "",
         arla_valor: "",
+        ap_refrigerado: "nao",
+        ap_refrigerado_horimetro: "",
+        ap_refrigerado_litros: "",
+        ap_refrigerado_valor: "",
+      })
+    }
+    if (action.type === "ocorrencia") {
+      setOcorrenciaForm({
+        categoria: "operacional",
+        severidade: "media",
+        houve_parada: "nao",
+        tempo_parado_min: "",
+        acao_imediata: "",
+        responsavel_acao: "",
+        contato: "",
+        prazo_solucao: "",
+        protocolo: "",
+      })
+      setDocumentacaoEventoForm({
+        tipo_documento: "NF",
+        numero_documento: "",
+        emissor: "",
+        validade_documento: "",
+        status_documento: "pendente",
+        protocolo_documento: "",
       })
     }
     setPassagemPontoSelecionado("")
@@ -1277,6 +2030,10 @@ export function ViagemDetalheClient({
 
   const isPassagemSelecionada = quickActionPartidaChegadaAtiva && selectedMarcoOperacional === "passagem"
   const isAbastecimentoSelecionado = eventForm.tipo_evento === "abastecimento" || eventForm.titulo === "Abastecimento"
+  const isDocumentacaoSelecionada =
+    eventForm.tipo_evento === "ocorrencia" &&
+    (eventForm.titulo || "").toLowerCase().includes("document")
+  const isOcorrenciaSelecionada = eventForm.tipo_evento === "ocorrencia" && !isDocumentacaoSelecionada
 
   const handleChangeMarcoOperacional = (value: MarcoOperacionalTipo) => {
     const config = marcoOperacionalConfig[value]
@@ -1306,24 +2063,98 @@ export function ViagemDetalheClient({
   const getAbastecimentoPayloadData = (payload: Record<string, unknown> | null | undefined) => {
     if (!payload) {
       return {
+        posto_modo: "cadastrado" as "cadastrado" | "livre",
         posto_id: "",
         hodometro: "",
         litros: "",
         valor_total: "",
         posto: "",
         arla: "nao",
+        arla_litros: "",
         arla_valor: "",
+        ap_refrigerado: "nao",
+        ap_refrigerado_horimetro: "",
+        ap_refrigerado_litros: "",
+        ap_refrigerado_valor: "",
       }
     }
 
     return {
+      posto_modo: payload.posto_modo === "livre" ? "livre" : (String(payload.posto_id || "") ? "cadastrado" : "livre"),
       posto_id: String(payload.posto_id || ""),
       hodometro: payload.hodometro !== undefined && payload.hodometro !== null ? String(payload.hodometro) : "",
       litros: payload.litros !== undefined && payload.litros !== null ? String(payload.litros) : "",
       valor_total: payload.valor_total !== undefined && payload.valor_total !== null ? String(payload.valor_total) : "",
       posto: String(payload.posto || ""),
       arla: payload.arla === "sim" ? "sim" : "nao",
+      arla_litros: payload.arla_litros !== undefined && payload.arla_litros !== null ? String(payload.arla_litros) : "",
       arla_valor: payload.arla_valor !== undefined && payload.arla_valor !== null ? String(payload.arla_valor) : "",
+      ap_refrigerado: payload.ap_refrigerado === "sim" ? "sim" : "nao",
+      ap_refrigerado_horimetro:
+        payload.ap_refrigerado_horimetro !== undefined && payload.ap_refrigerado_horimetro !== null
+          ? String(payload.ap_refrigerado_horimetro)
+          : "",
+      ap_refrigerado_litros:
+        payload.ap_refrigerado_litros !== undefined && payload.ap_refrigerado_litros !== null
+          ? String(payload.ap_refrigerado_litros)
+          : "",
+      ap_refrigerado_valor:
+        payload.ap_refrigerado_valor !== undefined && payload.ap_refrigerado_valor !== null
+          ? String(payload.ap_refrigerado_valor)
+          : "",
+    }
+  }
+
+  const getOcorrenciaPayloadData = (payload: Record<string, unknown> | null | undefined) => {
+    if (!payload) {
+      return {
+        categoria: "operacional",
+        severidade: "media",
+        houve_parada: "nao",
+        tempo_parado_min: "",
+        acao_imediata: "",
+        responsavel_acao: "",
+        contato: "",
+        prazo_solucao: "",
+        protocolo: "",
+      }
+    }
+
+    return {
+      categoria: String(payload.categoria || "operacional"),
+      severidade: String(payload.severidade || "media"),
+      houve_parada: payload.houve_parada === "sim" ? "sim" : "nao",
+      tempo_parado_min:
+        payload.tempo_parado_min !== undefined && payload.tempo_parado_min !== null
+          ? String(payload.tempo_parado_min)
+          : "",
+      acao_imediata: String(payload.acao_imediata || ""),
+      responsavel_acao: String(payload.responsavel_acao || ""),
+      contato: String(payload.contato || ""),
+      prazo_solucao: toDatetimeLocal(String(payload.prazo_solucao || "") || null),
+      protocolo: String(payload.protocolo || ""),
+    }
+  }
+
+  const getDocumentacaoPayloadData = (payload: Record<string, unknown> | null | undefined) => {
+    if (!payload) {
+      return {
+        tipo_documento: "NF",
+        numero_documento: "",
+        emissor: "",
+        validade_documento: "",
+        status_documento: "pendente",
+        protocolo_documento: "",
+      }
+    }
+
+    return {
+      tipo_documento: String(payload.tipo_documento || "NF"),
+      numero_documento: String(payload.numero_documento || ""),
+      emissor: String(payload.emissor || ""),
+      validade_documento: toDatetimeLocal(String(payload.validade_documento || "") || null),
+      status_documento: String(payload.status_documento || "pendente"),
+      protocolo_documento: String(payload.protocolo_documento || ""),
     }
   }
 
@@ -1448,6 +2279,7 @@ export function ViagemDetalheClient({
   const handleSaveEvent = async () => {
     if (!eventForm.titulo) return
     setLoading(true)
+    const viagemEventosId = eventoViagemAlvoId || subViagemAtivaId || viagemState.id
 
     const { data: authData } = await supabase.auth.getUser()
     const userId = authData.user?.id || viagemState.user_id
@@ -1477,8 +2309,8 @@ export function ViagemDetalheClient({
     }
 
     if (isAbastecimentoSelecionado) {
-      if (!abastecimentoForm.veiculo_id || !abastecimentoForm.hodometro || !abastecimentoForm.litros || !abastecimentoForm.valor_total) {
-        alert("Para abastecimento, preencha veículo, hodômetro, litros e valor total.")
+      if (!eventForm.inicio_em || !eventForm.local || !abastecimentoForm.hodometro || !abastecimentoForm.litros || !abastecimentoForm.valor_total) {
+        alert("Para abastecimento, preencha data/hora, local (cidade/UF), hodômetro, litros e valor total.")
         setLoading(false)
         return
       }
@@ -1488,35 +2320,89 @@ export function ViagemDetalheClient({
         setLoading(false)
         return
       }
+
+      if (abastecimentoForm.arla === "sim" && !abastecimentoForm.arla_litros) {
+        alert("Informe os litros de ARLA quando selecionado como SIM.")
+        setLoading(false)
+        return
+      }
+
+      if (abastecimentoForm.ap_refrigerado === "sim" && !abastecimentoForm.ap_refrigerado_valor) {
+        alert("Informe o valor de Termoking quando selecionado como SIM.")
+        setLoading(false)
+        return
+      }
+
+      if (abastecimentoForm.ap_refrigerado === "sim" && !abastecimentoForm.ap_refrigerado_horimetro) {
+        alert("Informe o horímetro de Termoking quando selecionado como SIM.")
+        setLoading(false)
+        return
+      }
+
+      if (abastecimentoForm.ap_refrigerado === "sim" && !abastecimentoForm.ap_refrigerado_litros) {
+        alert("Informe os litros de Termoking quando selecionado como SIM.")
+        setLoading(false)
+        return
+      }
+    }
+
+    if (isOcorrenciaSelecionada && ocorrenciaForm.houve_parada === "sim" && !ocorrenciaForm.tempo_parado_min) {
+      alert("Informe o tempo parado (min) para a ocorrência.")
+      setLoading(false)
+      return
+    }
+
+    if (isDocumentacaoSelecionada && !documentacaoEventoForm.tipo_documento) {
+      alert("Informe o tipo de documento.")
+      setLoading(false)
+      return
     }
 
     const localEvento =
       quickActionPartidaChegadaAtiva && marcoAtual === "saida"
-        ? origemOperacionalLabel
+        ? (eventForm.local?.trim() || origemOperacionalLabel || null)
         : quickActionPartidaChegadaAtiva && marcoAtual === "chegada"
-          ? destinoOperacionalLabel
+          ? (eventForm.local?.trim() || destinoOperacionalLabel || null)
           : quickActionPartidaChegadaAtiva && marcoAtual === "passagem"
             ? localPassagem
           : isAbastecimentoSelecionado
-            ? abastecimentoForm.posto || postosAbastecimento.find((item) => item.id === abastecimentoForm.posto_id)?.nome || eventForm.local || null
+            ? eventForm.local || abastecimentoForm.posto || postosAbastecimento.find((item) => item.id === abastecimentoForm.posto_id)?.nome || null
           : eventForm.local || null
     const payloadMetaBase =
-      marcoAtual === "passagem"
-        ? {
-            passagem_ponto_origem:
-              passagemPontoSelecionado === PASSAGEM_OUTRO_PONTO_VALUE ? "viagem" : "rota",
-          }
-        : {}
+      {
+        ...(marcoAtual === "passagem"
+          ? {
+              passagem_ponto_origem:
+                passagemPontoSelecionado === PASSAGEM_OUTRO_PONTO_VALUE ? "viagem" : "rota",
+            }
+          : {}),
+        lancamento_modo: eventoLancamentoModo,
+      }
 
     const payloadAbastecimento = isAbastecimentoSelecionado
       ? {
+          posto_modo: abastecimentoForm.posto_modo,
           veiculo_id: abastecimentoForm.veiculo_id,
           posto_id: abastecimentoForm.posto_id || null,
           hodometro: Number(abastecimentoForm.hodometro || 0),
           litros: Number(abastecimentoForm.litros || 0),
           valor_total: Number(abastecimentoForm.valor_total || 0),
           arla: abastecimentoForm.arla,
+          arla_litros: abastecimentoForm.arla === "sim" ? Number(abastecimentoForm.arla_litros || 0) : null,
           arla_valor: abastecimentoForm.arla === "sim" ? Number(abastecimentoForm.arla_valor || 0) : null,
+          ap_refrigerado: abastecimentoForm.ap_refrigerado,
+          ap_refrigerado_horimetro:
+            abastecimentoForm.ap_refrigerado === "sim"
+              ? Number(abastecimentoForm.ap_refrigerado_horimetro || 0)
+              : null,
+          ap_refrigerado_litros:
+            abastecimentoForm.ap_refrigerado === "sim"
+              ? Number(abastecimentoForm.ap_refrigerado_litros || 0)
+              : null,
+          ap_refrigerado_valor:
+            abastecimentoForm.ap_refrigerado === "sim"
+              ? Number(abastecimentoForm.ap_refrigerado_valor || 0)
+              : null,
           posto:
             abastecimentoForm.posto ||
             postosAbastecimento.find((item) => item.id === abastecimentoForm.posto_id)?.nome ||
@@ -1524,11 +2410,41 @@ export function ViagemDetalheClient({
         }
       : {}
 
+    const payloadOcorrencia = isOcorrenciaSelecionada
+      ? {
+          categoria: ocorrenciaForm.categoria,
+          severidade: ocorrenciaForm.severidade,
+          houve_parada: ocorrenciaForm.houve_parada,
+          tempo_parado_min:
+            ocorrenciaForm.houve_parada === "sim"
+              ? Number(ocorrenciaForm.tempo_parado_min || 0)
+              : null,
+          acao_imediata: ocorrenciaForm.acao_imediata || null,
+          responsavel_acao: ocorrenciaForm.responsavel_acao || null,
+          contato: ocorrenciaForm.contato || null,
+          prazo_solucao: toIsoOrNull(ocorrenciaForm.prazo_solucao),
+          protocolo: ocorrenciaForm.protocolo || null,
+        }
+      : {}
+
+    const payloadDocumentacao = isDocumentacaoSelecionada
+      ? {
+          tipo_documento: documentacaoEventoForm.tipo_documento,
+          numero_documento: documentacaoEventoForm.numero_documento || null,
+          emissor: documentacaoEventoForm.emissor || null,
+          validade_documento: toIsoOrNull(documentacaoEventoForm.validade_documento),
+          status_documento: documentacaoEventoForm.status_documento || "pendente",
+          protocolo_documento: documentacaoEventoForm.protocolo_documento || null,
+        }
+      : {}
+
     const payloadMeta =
-      Object.keys({ ...payloadMetaBase, ...payloadAbastecimento }).length > 0
+      Object.keys({ ...payloadMetaBase, ...payloadAbastecimento, ...payloadOcorrencia, ...payloadDocumentacao }).length > 0
         ? {
             ...payloadMetaBase,
             ...payloadAbastecimento,
+            ...payloadOcorrencia,
+            ...payloadDocumentacao,
           }
         : null
 
@@ -1586,12 +2502,14 @@ export function ViagemDetalheClient({
           }
         }
         await refreshEventos()
-        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        if (eventoLancamentoModo === "realizado") {
+          await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        }
         setEventModalOpen(false)
         setActiveTimelineEvent(null)
         await recalculateEta()
       } else if (error && isMissingViagemEventosTableError(error.message, error.code)) {
-        const localEventos = readLocalEventos(viagemState.id)
+        const localEventos = readLocalEventos(subViagemAtivaId || viagemState.id)
         const nowIso = new Date().toISOString()
         const updatedLocal = localEventos.map((item) =>
           item.id === activeTimelineEvent.id
@@ -1604,7 +2522,7 @@ export function ViagemDetalheClient({
             : item,
         )
 
-        writeLocalEventos(viagemState.id, updatedLocal)
+  writeLocalEventos(subViagemAtivaId || viagemState.id, updatedLocal)
         setEventos(updatedLocal)
         setUsingLocalEventosFallback(true)
 
@@ -1620,7 +2538,9 @@ export function ViagemDetalheClient({
           })
         }
 
-        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        if (eventoLancamentoModo === "realizado") {
+          await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        }
         setEventModalOpen(false)
         setActiveTimelineEvent(null)
         await recalculateEta()
@@ -1632,7 +2552,7 @@ export function ViagemDetalheClient({
         .from("viagem_eventos")
         .insert({
           user_id: userId,
-          viagem_id: viagemState.id,
+          viagem_id: viagemEventosId,
           ...payload,
           ocorrido_em: inicioIso,
         })
@@ -1661,7 +2581,9 @@ export function ViagemDetalheClient({
         }
 
         await refreshEventos()
-        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        if (eventoLancamentoModo === "realizado") {
+          await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        }
         setEventModalOpen(false)
         setActiveTimelineEvent(null)
         await recalculateEta()
@@ -1670,15 +2592,15 @@ export function ViagemDetalheClient({
         const localEvento: ViagemEvento = {
           id: createLocalEventId(),
           user_id: userId,
-          viagem_id: viagemState.id,
+          viagem_id: viagemEventosId,
           ...payload,
           ocorrido_em: inicioIso,
           created_at: nowIso,
           updated_at: nowIso,
         }
 
-        const localEventos = [localEvento, ...readLocalEventos(viagemState.id)]
-        writeLocalEventos(viagemState.id, localEventos)
+        const localEventos = [localEvento, ...readLocalEventos(viagemEventosId)]
+        writeLocalEventos(viagemEventosId, localEventos)
         setEventos(localEventos)
         setUsingLocalEventosFallback(true)
 
@@ -1690,9 +2612,12 @@ export function ViagemDetalheClient({
           })
         }
 
-        await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        if (eventoLancamentoModo === "realizado") {
+          await syncPlanejamentoRealByMarco(marcoAtual, inicioIso)
+        }
         setEventModalOpen(false)
         setActiveTimelineEvent(null)
+        setEventoViagemAlvoId(null)
         await recalculateEta()
       } else if (error) {
         alert(`Erro ao salvar evento: ${getEventoSaveErrorMessage(error.message, error.code)}`)
@@ -1725,8 +2650,8 @@ export function ViagemDetalheClient({
     }
 
     if (isMissingViagemEventosTableError(error.message, error.code)) {
-      const updatedLocal = readLocalEventos(viagemState.id).filter((item) => item.id !== activeTimelineEvent.id)
-      writeLocalEventos(viagemState.id, updatedLocal)
+      const updatedLocal = readLocalEventos(subViagemAtivaId || viagemState.id).filter((item) => item.id !== activeTimelineEvent.id)
+      writeLocalEventos(subViagemAtivaId || viagemState.id, updatedLocal)
       setEventos(updatedLocal)
       setUsingLocalEventosFallback(true)
       setEventModalOpen(false)
@@ -1872,16 +2797,242 @@ export function ViagemDetalheClient({
     setLoading(false)
   }
 
-  const handleFinalizarCiclo = async () => {
+  const handleFinalizarViagem = async (eventoFinalId: string, viagemIdAlvo: string = viagemAlvoId) => {
     setLoading(true)
 
-    const { error } = await supabase
+    const eventoFinal = eventos.find((e) => e.id === eventoFinalId)
+    const dataFim = eventoFinal?.ocorrido_em || new Date().toISOString()
+
+    let { error } = await supabase
       .from("viagens")
-      .update({ status: "Concluida" })
-      .eq("id", viagemState.id)
+      .update({ status: "Concluida", data_fim: dataFim, fechamento_evento_id: eventoFinalId })
+      .eq("id", viagemIdAlvo)
+
+    if (error) {
+      const errorMsg = error.message?.toLowerCase() || ""
+      if (errorMsg.includes("fechamento_evento_id")) {
+        const retry = await supabase
+          .from("viagens")
+          .update({ status: "Concluida", data_fim: dataFim })
+          .eq("id", viagemIdAlvo)
+        error = retry.error
+      }
+    }
 
     if (!error) {
-      setViagemState((prev) => ({ ...prev, status: "Concluida" }))
+      if (viagemIdAlvo === viagemState.id) {
+        setViagemState((prev) => ({ ...prev, status: "Concluida", data_fim: dataFim, fechamento_evento_id: eventoFinalId }))
+        setFechamentoEventoId(eventoFinalId)
+      } else {
+        setSubViagensCarregadas((prev) =>
+          prev.map((item) =>
+            item.id === viagemIdAlvo
+              ? { ...item, status: "Concluida", data_fim: dataFim, fechamento_evento_id: eventoFinalId }
+              : item,
+          ),
+        )
+      }
+      setEventosCicloExpandido(false)
+    }
+
+    setLoading(false)
+  }
+
+  const handleFinalizarCiclo = async (eventoFinalId: string) => {
+    setLoading(true)
+
+    const eventoFinal = eventos.find((e) => e.id === eventoFinalId)
+    const dataFim = eventoFinal?.ocorrido_em || new Date().toISOString()
+
+    // Update all viagens with the same ciclo_id to Concluida
+    let { error } = await supabase
+      .from("viagens")
+      .update({ status: "Concluida", data_fim: dataFim })
+      .eq("ciclo_id", cicloIdReferencia)
+
+    if (error) {
+      const errorMsg = error.message?.toLowerCase() || ""
+      if (!errorMsg.includes("ciclo_id")) {
+        // If error is not about ciclo_id, try without the filter
+        const retry = await supabase
+          .from("viagens")
+          .update({ status: "Concluida", data_fim: dataFim })
+          .eq("id", viagemState.id)
+        error = retry.error
+      }
+    }
+
+    if (!error) {
+      setViagemState((prev) => ({ ...prev, status: "Concluida", data_fim: dataFim, fechamento_evento_id: eventoFinalId }))
+      setFechamentoEventoId(eventoFinalId)
+      setEventosCicloExpandido(false)
+    }
+
+    setLoading(false)
+  }
+
+  const handleReobrirViagem = async (viagemIdAlvo: string = viagemAlvoId) => {
+    setLoading(true)
+
+    let { error } = await supabase
+      .from("viagens")
+      .update({ status: "Em andamento", data_fim: null, fechamento_evento_id: null })
+      .eq("id", viagemIdAlvo)
+
+    if (error) {
+      const errorMsg = error.message?.toLowerCase() || ""
+      if (errorMsg.includes("fechamento_evento_id")) {
+        const retry = await supabase
+          .from("viagens")
+          .update({ status: "Em andamento", data_fim: null })
+          .eq("id", viagemIdAlvo)
+        error = retry.error
+      }
+    }
+
+    if (!error) {
+      if (viagemIdAlvo === viagemState.id) {
+        setViagemState((prev) => ({ ...prev, status: "Em andamento", data_fim: null, fechamento_evento_id: null }))
+        setFechamentoEventoId("")
+      } else {
+        setSubViagensCarregadas((prev) =>
+          prev.map((item) =>
+            item.id === viagemIdAlvo
+              ? { ...item, status: "Em andamento", data_fim: null, fechamento_evento_id: null }
+              : item,
+          ),
+        )
+      }
+      setEventosCicloExpandido(false)
+    }
+
+    setLoading(false)
+  }
+
+  const handleIniciarNovaViagem = async () => {
+    setLoading(true)
+
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (!user) {
+      setLoading(false)
+      return
+    }
+
+    const eventoFechamento = eventos.find((evento) => evento.id === fechamentoEventoId)
+    const dataInicio = viagemState.data_fim || new Date().toISOString()
+
+    const novaViagemBase = {
+      ciclo_id: cicloIdReferencia,
+      viagem_pai_id: viagemState.id,
+      cliente_id: viagemState.cliente_id || null,
+      veiculo_id: viagemState.veiculo_id || null,
+      motorista_id: viagemState.motorista_id || null,
+      rota_id: viagemState.rota_id || null,
+      rota_avulsa: viagemState.rota_avulsa,
+      origem_real: eventoFechamento?.local || viagemState.destino_real || viagemState.origem_real || null,
+      destino_real: viagemState.destino_real || null,
+      data_inicio: dataInicio,
+      data_fim: null,
+      tipo_carga: viagemState.tipo_carga || null,
+      volume_toneladas: viagemState.volume_toneladas ?? null,
+      km_real: null,
+      valor_frete: viagemState.valor_frete ?? null,
+      status: "Planejada" as Viagem["status"],
+      user_id: user.id,
+      updated_at: new Date().toISOString(),
+    }
+
+    const novaViagem = {
+      ...novaViagemBase,
+      planejamento_rota: viagemState.planejamento_rota || null,
+    }
+
+    let { data, error } = await supabase
+      .from("viagens")
+      .insert(novaViagem)
+      .select("id")
+      .single()
+
+    if (error) {
+      const errorMsg = error.message?.toLowerCase() || ""
+      if (errorMsg.includes("planejamento_rota") || errorMsg.includes("ciclo_id") || errorMsg.includes("viagem_pai_id")) {
+        const insertData = { ...novaViagem } as Record<string, unknown>
+
+        if (errorMsg.includes("planejamento_rota")) {
+          delete insertData.planejamento_rota
+        }
+        if (errorMsg.includes("viagem_pai_id")) {
+          delete insertData.viagem_pai_id
+        }
+        if (errorMsg.includes("ciclo_id")) {
+          delete insertData.ciclo_id
+        }
+        
+        const retry = await supabase
+          .from("viagens")
+          .insert(insertData)
+          .select("id")
+          .single()
+        data = retry.data
+        error = retry.error
+      }
+    }
+
+    if (!error && data?.id) {
+      // Cycle timeline marker on parent trip
+      const novaViagemEventoCiclo = {
+        viagem_id: viagemState.id, // Parent viagem
+        tipo_evento: "nova_viagem" as EventoViagemTipo,
+        status_evento: "pendente" as EventoViagemStatus,
+        titulo: `Nova viagem iniciada: ${data.id.slice(0, 6).toUpperCase()}`,
+        local: eventoFechamento?.local || viagemState.destino_real || "Ponto indefinido",
+        observacao: `Sub-viagem iniciada a partir do fechamento`,
+        ocorrido_em: dataInicio,
+        previsto_em: dataInicio,
+        impacto_minutos: 0,
+        payload: { sub_viagem_id: data.id, lancamento_modo: "planejado" },
+      }
+
+      // Start marker inside the new trip so next events stay linked to it
+      const novaViagemEventoAbertura = {
+        viagem_id: data.id,
+        tipo_evento: "nova_viagem" as EventoViagemTipo,
+        status_evento: "concluido" as EventoViagemStatus,
+        titulo: `Início da viagem ${data.id.slice(0, 6).toUpperCase()}`,
+        local: eventoFechamento?.local || viagemState.destino_real || "Ponto inicial",
+        observacao: "Viagem aberta dentro do ciclo",
+        ocorrido_em: dataInicio,
+        previsto_em: dataInicio,
+        impacto_minutos: 0,
+        payload: { sub_viagem_id: data.id, lancamento_modo: "realizado" },
+      }
+
+      await supabase.from("viagem_eventos").insert(novaViagemEventoCiclo)
+      const { data: eventoAberturaCriado } = await supabase
+        .from("viagem_eventos")
+        .insert(novaViagemEventoAbertura)
+        .select("*")
+        .single()
+
+      setSubViagensCarregadas((prev) => [
+        {
+          ...(viagem as Viagem),
+          id: data.id,
+          status: "Em andamento",
+          data_inicio: dataInicio,
+          data_fim: null,
+          viagem_pai_id: viagemState.id,
+        },
+        ...prev,
+      ])
+      setRegistroViagemSelecionadaId(data.id)
+      setEventoViagemAlvoId(data.id)
+      if (eventoAberturaCriado) {
+        setEventos((prev) => [eventoAberturaCriado as ViagemEvento, ...prev])
+      } else {
+        await refreshEventos()
+      }
     }
 
     setLoading(false)
@@ -1909,27 +3060,53 @@ export function ViagemDetalheClient({
             <div className="space-y-3 xl:col-span-9">
               <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(220px,1fr)] gap-3">
                 <div className="space-y-3">
-                  <Card className="border-border/60 shadow-sm py-3 gap-2">
+                  <Card className="sticky top-2 z-10 border-border/60 bg-background/95 shadow-sm backdrop-blur py-3 gap-2">
                     <CardContent className="p-4 sm:p-4 space-y-1.5">
-                      <h2 className="text-xl font-bold tracking-tight">COCKPIT DO CICLO — TRANSLOG</h2>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-xl font-bold tracking-tight">CICLO TRANSLOG</h2>
+                        {subViagemAtivaId && (
+                          <Badge className="bg-blue-100 text-blue-800 border-blue-200">
+                            Visualizando sub-viagem
+                          </Badge>
+                        )}
+                        {subViagensCarregadas.length > 0 && !subViagemAtivaId && (
+                          <Badge className="bg-amber-100 text-amber-800 border-amber-200">
+                            {subViagensCarregadas.length} sub-viagem(s)
+                          </Badge>
+                        )}
+                      </div>
+                      {subViagemAtivaId && (
+                        <p className="text-xs text-muted-foreground">
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="h-auto p-0 text-xs"
+                            onClick={() => setSubViagemAtivaId(null)}
+                          >
+                            ← Voltar para viagem principal
+                          </Button>
+                        </p>
+                      )}
                       <p className="text-sm text-muted-foreground leading-tight">
                         Ciclo: <span className="font-medium text-foreground">{cicloLabel}</span>
+                        {" | "}ID do ciclo: <span className="font-medium text-foreground">{cicloIdReferencia}</span>
                         {" | "}Veículo: <span className="font-medium text-foreground">{viagemState.veiculo?.placa_cavalo || "A DEFINIR"}</span>
                         {" | "}Motorista: <span className="font-medium text-foreground">{viagemState.motorista?.nome || "A DEFINIR"}</span>
-                        {" | "}Status: <span className="font-semibold uppercase text-foreground">{faseOperacional}</span>
+                        {" | "}Status da viagem: <span className="font-semibold text-foreground">{faseOperacional}</span>
+                        {cicloFechado ? <Badge className="ml-2 bg-red-100 text-red-800 border-red-200">Fechamento de ciclo</Badge> : null}
                       </p>
                       <p className="text-sm text-muted-foreground leading-tight">
                         Marco atual: <span className="font-medium text-foreground">{ultimoMarco ? `${eventTypeLabels[ultimoMarco.tipo_evento]} (${ultimoMarco.local || "A DEFINIR"})` : "A DEFINIR"}</span>
                       </p>
                       <p className="text-sm text-muted-foreground leading-tight">
-                        Previsão próximo marco: <span className="font-medium text-foreground">{proximaAcaoTitulo} — {formatDateTime(proximaAcaoPrevisao)}</span>
-                        {" | "}Retorno: <span className="font-medium text-foreground">{viagemState.destino_real ? "DEFINIDO" : "EM ABERTO"}</span>
+                        Próximo marco (previsão): <span className="font-medium text-foreground">{proximaAcaoTitulo} — {formatDateTime(proximaAcaoPrevisao)}</span>
+                        {" | "}Retorno: <span className="font-medium text-foreground">{viagemState.destino_real ? "Definido" : "Em aberto"}</span>
                       </p>
                       <p className="text-sm text-muted-foreground leading-tight">
-                        Previsão de chegada ao destino: <span className="font-medium text-foreground">{formatDateTime(previsaoChegadaDestino)}</span>
-                        {tempoTotalParadoMin > 0 ? (
+                        Previsão destino: <span className="font-medium text-foreground">{formatDateTime(previsaoChegadaDestino)}</span>
+                        {atrasoAcumuladoCicloMin > 0 ? (
                           <>
-                            {" | "}Ajuste por tempo perdido: <span className="font-medium text-foreground">+{formatDurationByUnit(tempoTotalParadoMin)}</span>
+                            {" | "}Atraso acumulado: <span className="font-medium text-foreground">+{formatDurationByUnit(atrasoAcumuladoCicloMin)}</span>
                           </>
                         ) : null}
                       </p>
@@ -1953,15 +3130,68 @@ export function ViagemDetalheClient({
 
                 <div className="space-y-2 lg:self-start">
                   <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Carregamento real vs planejado</p><p className="text-base font-semibold">{formatDurationByUnit(tempoCarregamentoRealMin)} / {formatDurationByUnit(tempoCarregamentoPlanejadoMin)}</p></CardContent></Card>
-                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Tempo total parado</p><p className="text-base font-semibold">{formatDurationByUnit(tempoTotalParadoMin)}</p></CardContent></Card>
+                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Tempo parado (total)</p><p className="text-base font-semibold">{formatDurationByUnit(tempoTotalParadoMin)}</p></CardContent></Card>
+                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Atraso acumulado do ciclo</p><p className="text-base font-semibold">+{formatDurationByUnit(atrasoAcumuladoCicloMin)}</p></CardContent></Card>
                   <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Diesel no ciclo (L)</p><p className="text-base font-semibold">{abastecimentosResumo.litros.toFixed(0)} L</p></CardContent></Card>
                 </div>
               </div>
 
 
               <Card className="border-border/60 shadow-sm py-3 gap-2">
-                <CardHeader className="pb-1 px-4">
-                  <CardTitle className="text-lg">EVENTOS DO CICLO</CardTitle>
+                <CardHeader className="pb-1 px-4 gap-3">
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CardTitle className="text-lg">EVENTOS DO CICLO</CardTitle>
+                      <span className="text-xs font-mono text-muted-foreground border border-border/60 rounded px-2 py-0.5 bg-muted/40">
+                        {viagemLabel}
+                      </span>
+                      {viagemFechada && (
+                        <Badge className={`text-xs ${cicloFechado ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
+                          {cicloFechado ? "Fechamento de ciclo" : "Fechamento de viagem"} · {(subViagemAtiva?.data_fim || viagemState.data_fim) ? new Date((subViagemAtiva?.data_fim || viagemState.data_fim) as string).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 sticky top-2 z-20 bg-background/95 backdrop-blur rounded-md py-1">
+                      {viagemFechada ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleIniciarNovaViagem}
+                          disabled={loading}
+                        >
+                          {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                          Iniciar nova viagem
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          setOperacaoViagemTipo("fechar")
+                          setViagemOperacaoId(subViagemAtivaId || opcoesFecharViagem[0]?.id || viagemState.id)
+                          setOperacaoViagemModalOpen(true)
+                        }}
+                        disabled={loading || opcoesFecharViagem.length === 0}
+                      >
+                        {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                        Fechar viagem
+                      </Button>
+                      {opcoesReabrirViagem.length > 0 ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setOperacaoViagemTipo("reabrir")
+                            setViagemOperacaoId(opcoesReabrirViagem[0]?.id || "")
+                            setOperacaoViagemModalOpen(true)
+                          }}
+                          disabled={loading}
+                        >
+                          {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                          Reabrir viagem
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
                 </CardHeader>
                 <CardContent className="pt-0 px-4">
                   {usingLocalEventosFallback && (
@@ -1970,6 +3200,9 @@ export function ViagemDetalheClient({
                     </p>
                   )}
                   <div className="overflow-x-auto">
+                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                      <p className="text-xs text-muted-foreground">Status na tabela: cinza = realizado, amarelo = planejado.</p>
+                    </div>
                     <table className="w-full min-w-[860px] text-sm">
                       <thead>
                         <tr className="border-b text-left text-muted-foreground">
@@ -1983,78 +3216,118 @@ export function ViagemDetalheClient({
                         </tr>
                       </thead>
                       <tbody>
-                        {eventosCockpit.length === 0 && (
+                        {eventosCicloTabela.length === 0 && (
                           <tr>
                             <td className="py-3 text-muted-foreground" colSpan={7}>
                               Nenhum evento registrado neste ciclo.
                             </td>
                           </tr>
                         )}
-                        {eventosCockpit.map((evento) => (
-                          <tr
-                            key={evento.id}
-                            className="border-b border-border/50 cursor-pointer hover:bg-muted/30"
-                            onClick={() => {
-                              setActiveTimelineEvent(evento.source)
-                              const payloadData = getAbastecimentoPayloadData((evento.source.payload || null) as Record<string, unknown> | null)
-                              setAbastecimentoForm({
-                                veiculo_id: String((evento.source.payload as Record<string, unknown> | null)?.veiculo_id || viagemState.veiculo_id || ""),
-                                posto_id: payloadData.posto_id,
-                                hodometro: payloadData.hodometro,
-                                litros: payloadData.litros,
-                                valor_total: payloadData.valor_total,
-                                posto: payloadData.posto || evento.source.local || "",
-                                arla: payloadData.arla === "sim" ? "sim" : "nao",
-                                arla_valor: payloadData.arla_valor,
-                              })
-                              setEventForm({
-                                tipo_evento: evento.source.tipo_evento,
-                                status_evento: evento.source.status_evento,
-                                titulo: evento.source.titulo,
-                                local: evento.source.local || "",
-                                observacao: evento.source.observacao || "",
-                                inicio_em: toDatetimeLocal(evento.source.ocorrido_em),
-                                fim_em: toDatetimeLocal(evento.source.previsto_em || evento.source.ocorrido_em),
-                              })
-                              setEventModalOpen(true)
-                            }}
-                          >
-                            <td className="py-2 pr-2">{evento.ordem}</td>
-                            <td className="py-2 pr-2">{evento.tipo}</td>
-                            <td className="py-2 pr-2">{evento.local}</td>
-                            <td className="py-2 pr-2">{evento.inicio}</td>
-                            <td className="py-2 pr-2">{evento.fim}</td>
-                            <td className="py-2 pr-2">{evento.duracao}</td>
-                            <td className="py-2">{evento.status}</td>
-                          </tr>
+                        {eventosVisiveisAgrupados.map((grupo) => (
+                          <>
+                            {/* Header de Viagem */}
+                            <tr key={`header-${grupo.viagemId}`} className={`${grupo.temFechamento ? "bg-red-100/40" : "bg-blue-100/40"} border-b-2 border-border`}>
+                              <td colSpan={7} className="py-2 px-4">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-3">
+                                    <span className="font-semibold text-sm">Viagem {grupo.sequencia}</span>
+                                    <Badge variant={grupo.temFechamento ? "destructive" : "default"} className="text-xs">
+                                      {grupo.temFechamento ? "Fechada" : "Aberta"}
+                                    </Badge>
+                                    <span className="text-xs text-muted-foreground">
+                                      {grupo.contagem} evento(s)
+                                    </span>
+                                  </div>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      const newExpanded = new Set(expandedViagensIds)
+                                      if (newExpanded.has(grupo.viagemId)) {
+                                        newExpanded.delete(grupo.viagemId)
+                                      } else {
+                                        newExpanded.add(grupo.viagemId)
+                                      }
+                                      setExpandedViagensIds(newExpanded)
+                                    }}
+                                    className="text-xs"
+                                  >
+                                    {expandedViagensIds.has(grupo.viagemId) ? "Contrair" : "Expandir"}
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                            
+                            {/* Eventos da Viagem */}
+                            {grupo.eventosViagem.length > 0 ? (
+                              grupo.eventosViagem.map((evento) => (
+                                <tr
+                                  key={evento.id}
+                                  className={`border-b border-border/50 ${
+                                    evento.kind === "resumo_fechamento"
+                                      ? "bg-emerald-50 hover:bg-emerald-100/80"
+                                      : evento.modo === "realizado"
+                                        ? "bg-slate-100/80 hover:bg-slate-200/85"
+                                        : "bg-amber-50/55 hover:bg-amber-100/65"
+                                  } ${evento.source?.status_evento === "em_andamento" || evento.id === ultimoMarco?.id ? "ring-1 ring-blue-300 bg-blue-50/45" : ""} cursor-pointer`}
+                                  onClick={() => {
+                                    if (evento.kind === "resumo_fechamento") {
+                                      setEventosCicloExpandido(true)
+                                      return
+                                    }
+
+                                    if (!evento.source) return
+
+                                    setActiveTimelineEvent(evento.source)
+                                    setEventoViagemAlvoId(evento.source.viagem_id)
+                                    setEventoLancamentoModo(isEventoPlanejado(evento.source) ? "planejado" : "realizado")
+                                    const payloadData = getAbastecimentoPayloadData((evento.source.payload || null) as Record<string, unknown> | null)
+                                    const payloadOcorrencia = getOcorrenciaPayloadData((evento.source.payload || null) as Record<string, unknown> | null)
+                                    const payloadDocumentacao = getDocumentacaoPayloadData((evento.source.payload || null) as Record<string, unknown> | null)
+                                    setAbastecimentoForm({
+                                      veiculo_id: String((evento.source.payload as Record<string, unknown> | null)?.veiculo_id || viagemState.veiculo_id || ""),
+                                      posto_modo: payloadData.posto_modo,
+                                      posto_id: payloadData.posto_id,
+                                      hodometro: payloadData.hodometro,
+                                      litros: payloadData.litros,
+                                      valor_total: payloadData.valor_total,
+                                      posto: payloadData.posto || evento.source.local || "",
+                                      arla: payloadData.arla === "sim" ? "sim" : "nao",
+                                      arla_litros: payloadData.arla_litros,
+                                      arla_valor: payloadData.arla_valor,
+                                      ap_refrigerado: payloadData.ap_refrigerado === "sim" ? "sim" : "nao",
+                                      ap_refrigerado_horimetro: payloadData.ap_refrigerado_horimetro,
+                                      ap_refrigerado_litros: payloadData.ap_refrigerado_litros,
+                                      ap_refrigerado_valor: payloadData.ap_refrigerado_valor,
+                                    })
+                                    setOcorrenciaForm(payloadOcorrencia)
+                                    setDocumentacaoEventoForm(payloadDocumentacao)
+                                    setEventForm({
+                                      tipo_evento: evento.source.tipo_evento,
+                                      status_evento: evento.source.status_evento,
+                                      titulo: evento.source.titulo,
+                                      local: evento.source.local || "",
+                                      observacao: evento.source.observacao || "",
+                                      inicio_em: toDatetimeLocal(evento.source.ocorrido_em),
+                                      fim_em: toDatetimeLocal(evento.source.previsto_em || evento.source.ocorrido_em),
+                                    })
+                                    setEventModalOpen(true)
+                                  }}
+                                >
+                                  <td className="py-2 pr-2">{evento.ordem}</td>
+                                  <td className="py-2 pr-2">{evento.tipo}</td>
+                                  <td className="py-2 pr-2">{evento.local}</td>
+                                  <td className="py-2 pr-2">{evento.inicio}</td>
+                                  <td className="py-2 pr-2">{evento.fim}</td>
+                                  <td className="py-2 pr-2">{evento.duracao}</td>
+                                  <td className="py-2">{evento.status}</td>
+                                </tr>
+                              ))
+                            ) : null}
+                          </>
                         ))}
                       </tbody>
                     </table>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-3">Clique em uma linha para registrar apenas início, fim e observação.</p>
-                </CardContent>
-              </Card>
-
-              <Card className="border-border/60 shadow-sm w-full">
-                <CardHeader className="pb-2"><CardTitle className="text-xl">VIAGENS DO CICLO (organização)</CardTitle></CardHeader>
-                <CardContent className="space-y-2 pt-0">
-                  <p className="text-sm">1) {viagemLabel} — {viagemState.origem_real || "A DEFINIR"} → {viagemState.destino_real || "A DEFINIR"} <span className="text-muted-foreground">({statusNormalizado === "Em andamento" ? "em execução" : statusNormalizado.toLowerCase()})</span></p>
-                  <p className="text-sm">2) V-RETORNO — {viagemState.destino_real ? "planejado" : "RETORNO: EM ABERTO (criar quando fechar)"}</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => openNewEventModal("saida")}>+ Criar viagem de retorno</Button>
-                </CardContent>
-              </Card>
-
-              <Card className="border-border/60 shadow-sm w-full">
-                <CardHeader className="pb-2"><CardTitle className="text-xl">FECHAMENTO</CardTitle></CardHeader>
-                <CardContent className="space-y-3 pt-0">
-                  <Button type="button" onClick={handleFinalizarCiclo} disabled={loading}>
-                    {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
-                    Finalizar ciclo
-                  </Button>
-                  <div className="space-y-1 text-sm text-muted-foreground">
-                    <p>{eventosOrdenados[0]?.status_evento === "concluido" ? "☑" : "☐"} Último evento encerrado</p>
-                    <p>{abastecimentosResumo.qtd > 0 ? "☑" : "☐"} Abastecimentos lançados (se houve)</p>
-                    <p>{saldoAtualEstimadoLitros !== null ? "☑" : "☐"} Saldo final do tanque (L) informado</p>
                   </div>
                 </CardContent>
               </Card>
@@ -2062,27 +3335,68 @@ export function ViagemDetalheClient({
 
             <div className="space-y-3 xl:col-span-3">
               <Card className="border-border/60 shadow-sm">
-                <CardHeader className="pb-2"><CardTitle className="text-xl">PAINEL OPERACIONAL</CardTitle></CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-xl">Ações rápidas</CardTitle></CardHeader>
                 <CardContent className="space-y-2 pt-0">
-                  <p className="text-sm text-muted-foreground">AÇÕES RÁPIDAS ({smartQuickActions.length} botões) · ao clicar, informe início e fim</p>
+                  <div className="grid gap-1">
+                    <Label>Viagem dos registros</Label>
+                    <Select
+                      value={opcoesViagemAbertasRegistros.length > 0 ? registroViagemSelecionadaId : undefined}
+                      onValueChange={(value) => {
+                        setRegistroViagemSelecionadaId(value)
+                        setEventoViagemAlvoId(value)
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione a viagem (ID)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {opcoesViagemAbertasRegistros.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            Viagem {item.sequencia}
+                          </SelectItem>
+                        ))}
+                        {opcoesViagemAbertasRegistros.length === 0 ? (
+                          <SelectItem value="__sem_viagem_aberta__" disabled>
+                            Nenhuma viagem aberta
+                          </SelectItem>
+                        ) : null}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   {smartQuickActions.map(({ label, action }) => (
                     <Button
                       key={label}
                       type="button"
                       variant="outline"
                       className="w-full justify-start"
-                      onClick={() => handleQuickActionRegister(action)}
-                      disabled={loading}
+                      onClick={() => handleQuickActionRegister(action, "realizado")}
+                      disabled={loading || !temViagemAbertaParaRegistro}
                     >
                       {label}
                     </Button>
                   ))}
+                  {subViagensCarregadas && subViagensCarregadas.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={() => setFecharSubViagemModalOpen(true)}
+                      disabled={loading}
+                    >
+                      Fechar sub-viagem
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
 
               <Card className="border-border/60 shadow-sm">
                 <CardHeader className="pb-2"><CardTitle className="text-xl">DIESEL (LITROS)</CardTitle></CardHeader>
                 <CardContent className="space-y-3 pt-0 text-sm">
+                  <div className="flex items-center justify-end">
+                    <Button type="button" variant="outline" size="sm" onClick={() => openNewEventModal("abastecimento")} disabled={!temViagemAbertaParaRegistro}>
+                      Lançar abastecimento
+                    </Button>
+                  </div>
                   <div className="grid grid-cols-1 gap-2">
                     <div className="grid gap-1">
                       <Label htmlFor="saldoInicialLitros">Saldo inicial (L)</Label>
@@ -2093,7 +3407,18 @@ export function ViagemDetalheClient({
                         onChange={(event) => setSaldoInicialLitros(event.target.value)}
                       />
                     </div>
+                    <div className="grid gap-1">
+                      <Label htmlFor="dieselFinalLitros">Diesel final (L)</Label>
+                      <Input
+                        id="dieselFinalLitros"
+                        type="number"
+                        value={dieselFinalLitros}
+                        onChange={(event) => setDieselFinalLitros(event.target.value)}
+                      />
+                    </div>
                     <p>Abastecido no ciclo: <span className="font-medium">{abastecimentosResumo.litros.toFixed(0)} L</span></p>
+                    <p>Litros consumidos no ciclo: <span className="font-medium">{litrosConsumidosCiclo !== null ? `${litrosConsumidosCiclo.toFixed(0)} L` : "A DEFINIR"}</span></p>
+                    <p>KM/L do ciclo ({viagemState.motorista?.nome || "motorista"}): <span className="font-medium">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)} km/L` : "A DEFINIR"}</span></p>
                     <p>Consumo estimado: <span className="font-medium">{consumoEstimadoLitros !== null ? `${consumoEstimadoLitros.toFixed(0)} L` : "A DEFINIR"}</span></p>
                     <p>Saldo atual estimado: <span className="font-medium">{saldoAtualEstimadoLitros !== null ? `${saldoAtualEstimadoLitros.toFixed(0)} L` : "A DEFINIR"}</span></p>
                     <div className="grid gap-1">
@@ -2208,12 +3533,41 @@ export function ViagemDetalheClient({
         </TabsContent>
 
         <TabsContent value="kpis" className="space-y-4 min-h-0">
-          <div className={embedded ? "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"}>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo em trânsito</p><p className="text-lg font-semibold leading-tight break-words">{tempoTransitoHoras.toFixed(1)}h</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo parado</p><p className="text-lg font-semibold leading-tight break-words">{tempoParadoHoras.toFixed(1)}h</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Abastecimentos</p><p className="text-lg font-semibold leading-tight break-words">{abastecimentosResumo.qtd} ({abastecimentosResumo.litros.toFixed(0)}L)</p><p className="text-xs text-muted-foreground">{formatCurrency(abastecimentosResumo.custo)}</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Planejado vs Real (tempo)</p><p className="text-lg font-semibold leading-tight break-words">{plannedHours ? `${plannedHours.toFixed(1)}h` : "-"} / {realHours ? `${realHours.toFixed(1)}h` : "-"}</p></CardContent></Card>
+          <div className={embedded ? "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"}>
+            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Atraso acumulado do ciclo</p><p className="text-lg font-semibold leading-tight break-words">+{formatDurationByUnit(atrasoAcumuladoCicloMin)}</p></CardContent></Card>
+            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo parado total</p><p className="text-lg font-semibold leading-tight break-words">{formatDurationByUnit(tempoTotalParadoMin)}</p></CardContent></Card>
+            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo de fila</p><p className="text-lg font-semibold leading-tight break-words">{formatDurationByUnit(tempoFilaMin)}</p></CardContent></Card>
+            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo de carregamento</p><p className="text-lg font-semibold leading-tight break-words">{formatDurationByUnit(tempoCarregamentoRealMin)}</p></CardContent></Card>
+            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Tempo de descanso</p><p className="text-lg font-semibold leading-tight break-words">{formatDurationByUnit(tempoDescansoMin)}</p></CardContent></Card>
+            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Consumo KM/L por motorista</p><p className="text-lg font-semibold leading-tight break-words">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)} km/L` : "A DEFINIR"}</p><p className="text-xs text-muted-foreground">{viagemState.motorista?.nome || "Motorista não definido"}</p></CardContent></Card>
           </div>
+
+          <Card className="border-border/50">
+            <CardHeader>
+              <CardTitle>Atraso por ponto de passagem</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {atrasoPorPontos.length === 0 && (
+                <p className="text-muted-foreground">Sem baseline planejado. Defina previsão por trecho para medir atraso.</p>
+              )}
+              {atrasoPorPontos.map((item) => (
+                <div key={item.id} className="rounded-md border border-border/60 p-3">
+                  <p className="font-medium">{item.label}</p>
+                  <p className="text-muted-foreground">Previsão: {formatDateTime(item.previstoEm)}</p>
+                  <p className="text-muted-foreground">Real: {formatDateTime(item.realizadoEm)}</p>
+                  <p className={item.atrasoMin !== null && item.atrasoMin > 0 ? "text-amber-600" : "text-muted-foreground"}>
+                    {item.atrasoMin === null
+                      ? "Aguardando chegada real"
+                      : item.atrasoMin > 0
+                        ? `Atraso: +${formatDurationByUnit(item.atrasoMin)}`
+                        : item.atrasoMin < 0
+                          ? `Adiantado: ${formatDurationByUnit(Math.abs(item.atrasoMin))}`
+                          : "No horário"}
+                  </p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
 
           <Card className="border-border/50">
             <CardHeader>
@@ -2254,6 +3608,252 @@ export function ViagemDetalheClient({
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={operacaoViagemModalOpen} onOpenChange={setOperacaoViagemModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{operacaoViagemTipo === "fechar" ? "Selecionar viagem para finalizar" : "Selecionar viagem para reabrir"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              <Label>Viagem alvo</Label>
+              <Select value={viagemOperacaoId} onValueChange={setViagemOperacaoId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione a viagem" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(operacaoViagemTipo === "fechar" ? opcoesFecharViagem : opcoesReabrirViagem).map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      Viagem {item.sequencia}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setOperacaoViagemModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                disabled={!viagemOperacaoId || loading}
+                onClick={async () => {
+                  if (!viagemOperacaoId) return
+
+                  if (operacaoViagemTipo === "fechar") {
+                    const eventosSelecionados = await carregarEventosDaViagem(viagemOperacaoId)
+                    const realizados = eventosSelecionados.filter((e) => !isEventoPlanejado(e))
+                    setFinalizacaoTipo("viagem")
+                    setFinalizarViagemEventoId(realizados[0]?.id || "")
+                    setOperacaoViagemModalOpen(false)
+                    setFinalizacaoTipoModalOpen(true)
+                    return
+                  }
+
+                  await handleReobrirViagem(viagemOperacaoId)
+                  setOperacaoViagemModalOpen(false)
+                }}
+              >
+                Confirmar
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de escolha: Finalizar viagem ou ciclo */}
+      <Dialog open={finalizacaoTipoModalOpen} onOpenChange={setFinalizacaoTipoModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>O que deseja finalizar?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Escolha se deseja fechar apenas esta viagem ou o ciclo completo (todas as viagens deste ciclo).
+            </p>
+            <div className="flex gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1"
+                onClick={() => {
+                  setFinalizacaoTipo("viagem")
+                  const realizados = eventosCicloTabela.filter((e) => e.modo === "realizado")
+                  setFinalizarViagemEventoId(realizados[realizados.length - 1]?.id ?? "")
+                  setFinalizacaoTipoModalOpen(false)
+                  setFinalizarViagemModalOpen(true)
+                }}
+              >
+                <span>Finalizar apenas<br />esta <strong>Viagem</strong></span>
+              </Button>
+              <Button
+                type="button"
+                className="flex-1 bg-amber-600 hover:bg-amber-700"
+                onClick={() => {
+                  setFinalizacaoTipo("ciclo")
+                  const realizados = eventosCicloTabela.filter((e) => e.modo === "realizado")
+                  setFinalizarViagemEventoId(realizados[realizados.length - 1]?.id ?? "")
+                  setFinalizacaoTipoModalOpen(false)
+                  setFinalizarViagemModalOpen(true)
+                }}
+              >
+                <span>Finalizar<br />o <strong>Ciclo</strong> todo</span>
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={finalizarViagemModalOpen} onOpenChange={setFinalizarViagemModalOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {finalizacaoTipo === "viagem" ? "Finalizar viagem" : "Finalizar ciclo completo"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {finalizacaoTipo === "viagem"
+                ? "Selecione o evento que marca o final desta viagem. A data/hora desse evento será registrada como a conclusão."
+                : "Selecione o evento que marca o final do ciclo. Todas as viagens deste ciclo serão marcadas como concluídas."}
+            </p>
+            <div className="grid gap-2">
+              <Label>
+                {finalizacaoTipo === "viagem" ? "Evento final da viagem" : "Evento final do ciclo"}
+              </Label>
+              <Select
+                value={finalizarViagemEventoId}
+                onValueChange={setFinalizarViagemEventoId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um evento" />
+                </SelectTrigger>
+                <SelectContent>
+                  {eventosCicloTabela
+                    .filter((e) => e.modo === "realizado")
+                    .map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        #{e.ordem} · {e.tipo}{e.local && e.local !== "-" ? ` — ${e.local}` : ""} · {e.inicio}
+                      </SelectItem>
+                    ))
+                  }
+                  {eventosCicloTabela.filter((e) => e.modo === "realizado").length === 0 && (
+                    <SelectItem value="__sem_eventos__" disabled>
+                      Nenhum evento realizado registrado
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="outline" onClick={() => setFinalizarViagemModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                disabled={loading || !finalizarViagemEventoId || finalizarViagemEventoId === "__sem_eventos__"}
+                onClick={async () => {
+                  if (finalizacaoTipo === "viagem") {
+                    await handleFinalizarViagem(finalizarViagemEventoId)
+                  } else {
+                    await handleFinalizarCiclo(finalizarViagemEventoId)
+                  }
+                  setFinalizarViagemModalOpen(false)
+                }}
+              >
+                {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                {finalizacaoTipo === "viagem" ? "Confirmar fechamento da viagem" : "Confirmar fechamento do ciclo"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={timelinePlanejadoModalOpen} onOpenChange={setTimelinePlanejadoModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[88vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Planejar timeline do ciclo</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label>Origem · Partida planejada</Label>
+                <Input
+                  type="datetime-local"
+                  value={timelinePlanejado.origem_partida_planejada || ""}
+                  onChange={(event) =>
+                    setTimelinePlanejado((prev) => ({
+                      ...prev,
+                      origem_partida_planejada: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Destino · Chegada planejada</Label>
+                <Input
+                  type="datetime-local"
+                  value={timelinePlanejado.destino_chegada_planejada || ""}
+                  onChange={(event) =>
+                    setTimelinePlanejado((prev) => ({
+                      ...prev,
+                      destino_chegada_planejada: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            {timelinePlanejado.intermediarios.length > 0 && (
+              <div className="space-y-3">
+                {timelinePlanejado.intermediarios.map((ponto, index) => (
+                  <div key={ponto.chave || `${ponto.cidade}-${index}`} className="rounded-md border border-border/60 p-3">
+                    <p className="text-xs font-medium text-foreground mb-2">
+                      {index + 1}. {ponto.cidade}/{ponto.estado}
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="grid gap-2">
+                        <Label>Chegada planejada</Label>
+                        <Input
+                          type="datetime-local"
+                          value={ponto.chegada_planejada || ""}
+                          onChange={(event) => updateTimelinePlanejadoIntermediario(index, "chegada_planejada", event.target.value)}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>Partida planejada</Label>
+                        <Input
+                          type="datetime-local"
+                          value={ponto.partida_planejada || ""}
+                          onChange={(event) => updateTimelinePlanejadoIntermediario(index, "partida_planejada", event.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setTimelinePlanejadoModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                onClick={async () => {
+                  await salvarTimelinePlanejada()
+                  setTimelinePlanejadoModalOpen(false)
+                }}
+                disabled={loading}
+              >
+                {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                Salvar planejado e recalcular ETA
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={timelineRealModalOpen} onOpenChange={setTimelineRealModalOpen}>
         <DialogContent className="max-w-4xl max-h-[88vh] overflow-y-auto">
@@ -2343,9 +3943,22 @@ export function ViagemDetalheClient({
       <Dialog open={eventModalOpen} onOpenChange={setEventModalOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{activeTimelineEvent ? "Atualizar ponto da timeline" : "Registrar evento"}</DialogTitle>
+            <DialogTitle>{activeTimelineEvent ? "Atualizar ponto da timeline" : (eventForm.titulo ? `Lançar evento: ${eventForm.titulo}` : "Lançar evento")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div>
+              <Label>Modo de lançamento</Label>
+              <Select
+                value={eventoLancamentoModo}
+                onValueChange={(value: "realizado" | "planejado") => setEventoLancamentoModo(value)}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="realizado">Realizado</SelectItem>
+                  <SelectItem value="planejado">Planejado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             {quickActionPartidaChegadaAtiva && (
               <div>
                 <Label>Tipo de marco</Label>
@@ -2416,6 +4029,25 @@ export function ViagemDetalheClient({
                   />
                 </div>
                 <div>
+                  <Label>Data/hora *</Label>
+                  <Input
+                    type="datetime-local"
+                    value={eventForm.inicio_em}
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setEventForm((prev) => ({ ...prev, inicio_em: value, fim_em: value || prev.fim_em }))
+                    }}
+                  />
+                </div>
+                <div>
+                  <Label>Local (cidade/UF) *</Label>
+                  <Input
+                    value={eventForm.local}
+                    placeholder="Ex.: Rondonópolis/MT"
+                    onChange={(event) => setEventForm((prev) => ({ ...prev, local: event.target.value }))}
+                  />
+                </div>
+                <div>
                   <Label>Hodômetro (km) *</Label>
                   <Input
                     type="number"
@@ -2443,54 +4075,227 @@ export function ViagemDetalheClient({
                   />
                 </div>
                 <div>
-                  <Label>Posto cadastrado</Label>
+                  <Label>Posto (origem)</Label>
                   <Select
-                    value={abastecimentoForm.posto_id || undefined}
-                    onValueChange={(value) => {
-                      const postoSelecionado = postosAbastecimento.find((posto) => posto.id === value)
+                    value={abastecimentoForm.posto_modo}
+                    onValueChange={(value: "cadastrado" | "livre") =>
                       setAbastecimentoForm((prev) => ({
                         ...prev,
-                        posto_id: value,
-                        posto: postoSelecionado?.nome || prev.posto,
+                        posto_modo: value,
+                        posto_id: value === "cadastrado" ? prev.posto_id : "",
+                        posto: value === "livre" ? prev.posto : "",
                       }))
-                      if (postoSelecionado?.nome) {
-                        setEventForm((prev) => ({ ...prev, local: postoSelecionado.nome }))
-                      }
-                    }}
+                    }
                   >
-                    <SelectTrigger><SelectValue placeholder={postosAbastecimento.length > 0 ? "Selecione um posto" : "Nenhum posto cadastrado"} /></SelectTrigger>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {postosAbastecimento.map((posto) => (
-                        <SelectItem key={posto.id} value={posto.id}>
-                          {posto.nome}{posto.localidade ? ` • ${posto.localidade}` : ""}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="cadastrado">Posto cadastrado</SelectItem>
+                      <SelectItem value="livre">Posto livre</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {abastecimentoForm.posto_modo === "cadastrado" ? (
+                  <div>
+                    <Label>Posto cadastrado</Label>
+                    <Select
+                      value={abastecimentoForm.posto_id || undefined}
+                      onValueChange={(value) => {
+                        const postoSelecionado = postosAbastecimento.find((posto) => posto.id === value)
+                        setAbastecimentoForm((prev) => ({
+                          ...prev,
+                          posto_id: value,
+                          posto: postoSelecionado?.nome || "",
+                        }))
+                      }}
+                    >
+                      <SelectTrigger><SelectValue placeholder={postosAbastecimento.length > 0 ? "Selecione um posto" : "Nenhum posto cadastrado"} /></SelectTrigger>
+                      <SelectContent>
+                        {postosAbastecimento.map((posto) => (
+                          <SelectItem key={posto.id} value={posto.id}>
+                            {posto.nome}{posto.localidade ? ` • ${posto.localidade}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div>
+                    <Label>Nome do posto (opcional)</Label>
+                    <Input
+                      value={abastecimentoForm.posto}
+                      placeholder="Ex.: Posto BR 163"
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setAbastecimentoForm((prev) => ({ ...prev, posto: value }))
+                      }}
+                    />
+                  </div>
+                )}
+                <div className="md:col-span-2 rounded-md border border-border/60 p-3">
+                  <details>
+                    <summary className="cursor-pointer text-sm font-medium">Avançado (opcional)</summary>
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <Label>ARLA</Label>
+                        <Select
+                          value={abastecimentoForm.arla}
+                          onValueChange={(value: "sim" | "nao") =>
+                            setAbastecimentoForm((prev) => ({
+                              ...prev,
+                              arla: value,
+                              arla_litros: value === "sim" ? prev.arla_litros : "",
+                              arla_valor: value === "sim" ? prev.arla_valor : "",
+                            }))
+                          }
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="nao">Não</SelectItem>
+                            <SelectItem value="sim">Sim</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {abastecimentoForm.arla === "sim" && (
+                        <>
+                          <div>
+                            <Label>ARLA litros</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={abastecimentoForm.arla_litros}
+                              onChange={(event) =>
+                                setAbastecimentoForm((prev) => ({ ...prev, arla_litros: event.target.value }))
+                              }
+                            />
+                          </div>
+                          <div>
+                            <Label>ARLA valor total (R$)</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={abastecimentoForm.arla_valor}
+                              onChange={(event) =>
+                                setAbastecimentoForm((prev) => ({ ...prev, arla_valor: event.target.value }))
+                              }
+                            />
+                          </div>
+                        </>
+                      )}
+                      <div>
+                        <Label>ThermoKing</Label>
+                        <Select
+                          value={abastecimentoForm.ap_refrigerado}
+                          onValueChange={(value: "sim" | "nao") =>
+                            setAbastecimentoForm((prev) => ({
+                              ...prev,
+                              ap_refrigerado: value,
+                              ap_refrigerado_horimetro: value === "sim" ? prev.ap_refrigerado_horimetro : "",
+                              ap_refrigerado_litros: value === "sim" ? prev.ap_refrigerado_litros : "",
+                              ap_refrigerado_valor: value === "sim" ? prev.ap_refrigerado_valor : "",
+                            }))
+                          }
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="nao">Não</SelectItem>
+                            <SelectItem value="sim">Sim</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {abastecimentoForm.ap_refrigerado === "sim" && (
+                        <>
+                          <div>
+                            <Label>ThermoKing litros</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={abastecimentoForm.ap_refrigerado_litros}
+                              onChange={(event) =>
+                                setAbastecimentoForm((prev) => ({ ...prev, ap_refrigerado_litros: event.target.value }))
+                              }
+                            />
+                          </div>
+                          <div>
+                            <Label>ThermoKing horímetro</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={abastecimentoForm.ap_refrigerado_horimetro}
+                              onChange={(event) =>
+                                setAbastecimentoForm((prev) => ({ ...prev, ap_refrigerado_horimetro: event.target.value }))
+                              }
+                            />
+                          </div>
+                          <div>
+                            <Label>ThermoKing valor total (R$)</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={abastecimentoForm.ap_refrigerado_valor}
+                              onChange={(event) =>
+                                setAbastecimentoForm((prev) => ({ ...prev, ap_refrigerado_valor: event.target.value }))
+                              }
+                            />
+                          </div>
+                        </>
+                      )}
+                      <div className="md:col-span-2">
+                        <Label>Anexo/Nota</Label>
+                        <Textarea
+                          value={eventForm.observacao}
+                          placeholder="Observações do abastecimento ou referência de anexo/nota"
+                          onChange={(event) => setEventForm((prev) => ({ ...prev, observacao: event.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              </div>
+            )}
+
+            {isOcorrenciaSelecionada && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-md border border-border/60 p-3">
+                <div>
+                  <Label>Categoria da ocorrência</Label>
+                  <Select
+                    value={ocorrenciaForm.categoria}
+                    onValueChange={(value) => setOcorrenciaForm((prev) => ({ ...prev, categoria: value }))}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="operacional">Operacional</SelectItem>
+                      <SelectItem value="seguranca">Segurança</SelectItem>
+                      <SelectItem value="mecanica">Mecânica</SelectItem>
+                      <SelectItem value="trafego">Tráfego</SelectItem>
+                      <SelectItem value="fiscal">Fiscal</SelectItem>
+                      <SelectItem value="outros">Outros</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label>Posto (livre)</Label>
-                  <Input
-                    value={abastecimentoForm.posto}
-                    placeholder="Use se o posto não estiver cadastrado"
-                    onChange={(event) => {
-                      const value = event.target.value
-                      setAbastecimentoForm((prev) => ({ ...prev, posto: value }))
-                      if (value) {
-                        setEventForm((prev) => ({ ...prev, local: value }))
-                      }
-                    }}
-                  />
+                  <Label>Severidade</Label>
+                  <Select
+                    value={ocorrenciaForm.severidade}
+                    onValueChange={(value) => setOcorrenciaForm((prev) => ({ ...prev, severidade: value }))}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="baixa">Baixa</SelectItem>
+                      <SelectItem value="media">Média</SelectItem>
+                      <SelectItem value="alta">Alta</SelectItem>
+                      <SelectItem value="critica">Crítica</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <Label>ARLA</Label>
+                  <Label>Houve parada?</Label>
                   <Select
-                    value={abastecimentoForm.arla}
+                    value={ocorrenciaForm.houve_parada}
                     onValueChange={(value: "sim" | "nao") =>
-                      setAbastecimentoForm((prev) => ({
+                      setOcorrenciaForm((prev) => ({
                         ...prev,
-                        arla: value,
-                        arla_valor: value === "sim" ? prev.arla_valor : "",
+                        houve_parada: value,
+                        tempo_parado_min: value === "sim" ? prev.tempo_parado_min : "",
                       }))
                     }
                   >
@@ -2501,19 +4306,139 @@ export function ViagemDetalheClient({
                     </SelectContent>
                   </Select>
                 </div>
-                {abastecimentoForm.arla === "sim" && (
+                {ocorrenciaForm.houve_parada === "sim" && (
                   <div>
-                    <Label>Valor ARLA (R$)</Label>
+                    <Label>Tempo parado (min)</Label>
                     <Input
                       type="number"
-                      step="0.01"
-                      value={abastecimentoForm.arla_valor}
+                      step="1"
+                      value={ocorrenciaForm.tempo_parado_min}
                       onChange={(event) =>
-                        setAbastecimentoForm((prev) => ({ ...prev, arla_valor: event.target.value }))
+                        setOcorrenciaForm((prev) => ({ ...prev, tempo_parado_min: event.target.value }))
                       }
                     />
                   </div>
                 )}
+                <div className="md:col-span-2">
+                  <Label>Ação imediata</Label>
+                  <Textarea
+                    value={ocorrenciaForm.acao_imediata}
+                    onChange={(event) =>
+                      setOcorrenciaForm((prev) => ({ ...prev, acao_imediata: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label>Responsável pela ação</Label>
+                  <Input
+                    value={ocorrenciaForm.responsavel_acao}
+                    onChange={(event) =>
+                      setOcorrenciaForm((prev) => ({ ...prev, responsavel_acao: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label>Contato</Label>
+                  <Input
+                    value={ocorrenciaForm.contato}
+                    onChange={(event) =>
+                      setOcorrenciaForm((prev) => ({ ...prev, contato: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label>Prazo de solução</Label>
+                  <Input
+                    type="datetime-local"
+                    value={ocorrenciaForm.prazo_solucao}
+                    onChange={(event) =>
+                      setOcorrenciaForm((prev) => ({ ...prev, prazo_solucao: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label>Protocolo / referência</Label>
+                  <Input
+                    value={ocorrenciaForm.protocolo}
+                    onChange={(event) =>
+                      setOcorrenciaForm((prev) => ({ ...prev, protocolo: event.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
+            {isDocumentacaoSelecionada && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-md border border-border/60 p-3">
+                <div>
+                  <Label>Tipo de documento</Label>
+                  <Select
+                    value={documentacaoEventoForm.tipo_documento}
+                    onValueChange={(value) => setDocumentacaoEventoForm((prev) => ({ ...prev, tipo_documento: value }))}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NF">NF</SelectItem>
+                      <SelectItem value="CTE">CT-e</SelectItem>
+                      <SelectItem value="MDFE">MDF-e</SelectItem>
+                      <SelectItem value="CANHOTO">Canhoto</SelectItem>
+                      <SelectItem value="COMPROVANTE_ABASTECIMENTO">Comprovante abastecimento</SelectItem>
+                      <SelectItem value="FOTO">Foto</SelectItem>
+                      <SelectItem value="OUTRO">Outro</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Status do documento</Label>
+                  <Select
+                    value={documentacaoEventoForm.status_documento}
+                    onValueChange={(value) => setDocumentacaoEventoForm((prev) => ({ ...prev, status_documento: value }))}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pendente">Pendente</SelectItem>
+                      <SelectItem value="conferido">Conferido</SelectItem>
+                      <SelectItem value="divergente">Divergente</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Número do documento</Label>
+                  <Input
+                    value={documentacaoEventoForm.numero_documento}
+                    onChange={(event) =>
+                      setDocumentacaoEventoForm((prev) => ({ ...prev, numero_documento: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label>Emissor</Label>
+                  <Input
+                    value={documentacaoEventoForm.emissor}
+                    onChange={(event) =>
+                      setDocumentacaoEventoForm((prev) => ({ ...prev, emissor: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label>Validade</Label>
+                  <Input
+                    type="datetime-local"
+                    value={documentacaoEventoForm.validade_documento}
+                    onChange={(event) =>
+                      setDocumentacaoEventoForm((prev) => ({ ...prev, validade_documento: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label>Protocolo / referência</Label>
+                  <Input
+                    value={documentacaoEventoForm.protocolo_documento}
+                    onChange={(event) =>
+                      setDocumentacaoEventoForm((prev) => ({ ...prev, protocolo_documento: event.target.value }))
+                    }
+                  />
+                </div>
               </div>
             )}
 
@@ -2532,7 +4457,7 @@ export function ViagemDetalheClient({
                   onChange={(event) => setEventForm((prev) => ({ ...prev, inicio_em: event.target.value }))}
                 />
               </div>
-            ) : (
+            ) : !isAbastecimentoSelecionado ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <Label>Início (data/hora)</Label>
@@ -2543,11 +4468,15 @@ export function ViagemDetalheClient({
                   <Input type="datetime-local" value={eventForm.fim_em} onChange={(event) => setEventForm((prev) => ({ ...prev, fim_em: event.target.value }))} />
                 </div>
               </div>
+            ) : (
+              <></>
             )}
-            <div>
-              <Label>Observação curta</Label>
-              <Textarea value={eventForm.observacao} onChange={(event) => setEventForm((prev) => ({ ...prev, observacao: event.target.value }))} />
-            </div>
+            {!isAbastecimentoSelecionado && (
+              <div>
+                <Label>Observação curta</Label>
+                <Textarea value={eventForm.observacao} onChange={(event) => setEventForm((prev) => ({ ...prev, observacao: event.target.value }))} />
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {activeTimelineEvent ? (
                 <Button type="button" variant="outline" className="border-destructive/40 text-destructive hover:text-destructive" onClick={handleDeleteEvent} disabled={loading}>
@@ -2656,6 +4585,61 @@ export function ViagemDetalheClient({
             </div>
             <div><Label>Observação</Label><Textarea value={docForm.observacao} onChange={(event) => setDocForm((prev) => ({ ...prev, observacao: event.target.value }))} /></div>
             <Button className="w-full" onClick={handleSaveDocumento} disabled={loading}>Salvar documento</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal para selecionar sub-viagem a fechar */}
+      <Dialog open={fecharSubViagemModalOpen} onOpenChange={setFecharSubViagemModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Fechar sub-viagem</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Selecione a sub-viagem que deseja fechar:
+            </p>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {subViagensCarregadas && subViagensCarregadas.length > 0 ? (
+                subViagensCarregadas.map((subViagem) => (
+                  <Button
+                    key={subViagem.id}
+                    type="button"
+                    variant={subViagemParaFecharId === subViagem.id ? "default" : "outline"}
+                    className="w-full justify-start text-left"
+                    onClick={() => setSubViagemParaFecharId(subViagem.id)}
+                  >
+                    <div className="flex items-center gap-2 flex-1">
+                      <div className="flex-1">
+                        <p className="font-medium text-sm">Sub-viagem {subViagem.id.slice(0, 8)}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Status: <span>{subViagem.status}</span>
+                        </p>
+                      </div>
+                      {subViagem.status === "Fechada" && <Badge variant="secondary" className="ml-2">Fechada</Badge>}
+                    </div>
+                  </Button>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">Nenhuma sub-viagem disponível</p>
+              )}
+            </div>
+            {subViagemParaFecharId && (
+              <Button
+                type="button"
+                className="w-full bg-red-600 hover:bg-red-700"
+                onClick={() => {
+                  setFinalizacaoTipo("viagem")
+                  const realizados = eventosCicloTabela.filter((e) => e.modo === "realizado")
+                  setFinalizarViagemEventoId(realizados[realizados.length - 1]?.id ?? "")
+                  setFecharSubViagemModalOpen(false)
+                  setViagemOperacaoId(subViagemParaFecharId || "")
+                  setFinalizacaoTipoModalOpen(true)
+                }}
+              >
+                Prosseguir com fechamento
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>

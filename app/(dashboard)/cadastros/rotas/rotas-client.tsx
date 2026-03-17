@@ -120,6 +120,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
       (rota.pontos_intermediarios || []).map((ponto) => ({
         ...ponto,
         km: normalizePontoIntermediarioKm(ponto.km),
+        tempo_trecho_horas: ponto.tempo_trecho_horas !== undefined && ponto.tempo_trecho_horas !== null ? Number(ponto.tempo_trecho_horas) : null,
         tipo_parada: normalizePontoParadaTipo(ponto.tipo_parada),
       })),
     )
@@ -150,7 +151,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
   const addPonto = () => {
     setPontosIntermediarios([
       ...pontosIntermediarios,
-      { cidade: "", estado: "", km: null, tipo_parada: "parada", observacao: "" },
+      { cidade: "", estado: "", km: null, tempo_trecho_horas: null, tipo_parada: "parada", observacao: "" },
     ])
   }
 
@@ -181,6 +182,10 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
         .map((ponto) => ({
           ...ponto,
           km: normalizePontoIntermediarioKm(ponto.km),
+          tempo_trecho_horas:
+            ponto.tempo_trecho_horas !== undefined && ponto.tempo_trecho_horas !== null && String(ponto.tempo_trecho_horas) !== ""
+              ? Number(ponto.tempo_trecho_horas)
+              : null,
           tipo_parada: normalizePontoParadaTipo(ponto.tipo_parada),
         }))
 
@@ -389,7 +394,7 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
                         <X className="h-4 w-4" />
                       </Button>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-9 gap-2">
                       <div className="md:col-span-2 grid gap-1">
                         <Label className="text-xs">Cidade</Label>
                         <Input value={ponto.cidade} onChange={(e) => updatePonto(index, "cidade", e.target.value)} placeholder="Cidade" />
@@ -410,6 +415,17 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
                           value={ponto.km ?? ""}
                           onChange={(e) => updatePonto(index, "km", e.target.value)}
                           placeholder="KM da origem"
+                        />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label className="text-xs">Trecho (h)</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          value={ponto.tempo_trecho_horas ?? ""}
+                          onChange={(e) => updatePonto(index, "tempo_trecho_horas", e.target.value)}
+                          placeholder="Ex.: 4"
                         />
                       </div>
                       <div className="md:col-span-2 grid gap-1">

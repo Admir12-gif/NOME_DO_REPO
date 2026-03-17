@@ -18,6 +18,7 @@ export default async function ViagemDetalhePage({ params }: ViagemDetalhePagePro
     receitasRes,
     documentosRes,
     parametrosRes,
+    subViagensRes,
   ] = await Promise.all([
     supabase
       .from("viagens")
@@ -48,6 +49,11 @@ export default async function ViagemDetalhePage({ params }: ViagemDetalhePagePro
       .from("eta_parametros")
       .select("*")
       .eq("ativo", true),
+    supabase
+      .from("viagens")
+      .select("id, data_inicio, data_fim, status")
+      .eq("viagem_pai_id", viagemId)
+      .order("data_inicio", { ascending: false }),
   ])
 
   if (!viagemRes.data) {
@@ -62,6 +68,7 @@ export default async function ViagemDetalhePage({ params }: ViagemDetalhePagePro
       initialReceitas={receitasRes.data || []}
       initialDocumentos={documentosRes.data || []}
       etaParametros={parametrosRes.data || []}
+      initialSubViagens={subViagensRes.data || []}
     />
   )
 }
