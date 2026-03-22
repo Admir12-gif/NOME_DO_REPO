@@ -129,6 +129,7 @@ export type EventoViagemTipo =
   | 'parada'
   | 'espera'
   | 'nova_viagem'
+  | 'manutencao'
 
 export type EventoViagemStatus = 'concluido' | 'em_andamento' | 'pendente' | 'atrasado'
 

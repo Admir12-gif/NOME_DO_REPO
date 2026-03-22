@@ -124,14 +124,10 @@ function getFechamentoEventoStorageKey(viagemId: string) {
 const cockpitQuickActions: CockpitQuickAction[] = [
   { label: "Chegada", type: "chegada", status: "concluido", title: "Chegada" },
   { label: "Saída", type: "saida", status: "concluido", title: "Saída" },
-  { label: "Iniciar carregamento", type: "parada", status: "em_andamento", title: "Início de carregamento" },
-  { label: "Finalizar carregamento", type: "parada", status: "concluido", title: "Fim de carregamento" },
-  { label: "Iniciar descanso", type: "parada", status: "em_andamento", title: "Início de descanso" },
-  { label: "Finalizar descanso", type: "parada", status: "concluido", title: "Fim de descanso" },
+  { label: "Parada", type: "parada", status: "em_andamento", title: "Parada" },
   { label: "Abastecimento", type: "abastecimento", status: "concluido", title: "Abastecimento" },
-  { label: "Manutenção (ocorrência)", type: "parada", status: "pendente", title: "Manutenção" },
+  { label: "Manutenção", type: "manutencao" as any, status: "concluido", title: "Manutenção" },
   { label: "Documentação", type: "ocorrencia", status: "pendente", title: "Documentação" },
-  { label: "Ocorrência", type: "ocorrencia", status: "pendente", title: "Ocorrência" },
 ]
 
 function findQuickActionByTitle(title: string) {
@@ -147,6 +143,7 @@ const eventTypeLabels: Record<EventoViagemTipo, string> = {
   parada: "Parada",
   espera: "Espera",
   nova_viagem: "Nova viagem",
+  manutencao: "Manutenção",
 }
 
 const eventStatusLabel: Record<EventoViagemStatus, string> = {
@@ -331,6 +328,10 @@ export function ViagemDetalheClient({
   const [usingLocalEventosFallback, setUsingLocalEventosFallback] = useState(false)
 
   const [eventModalOpen, setEventModalOpen] = useState(false)
+  // Novo estado para modal de ações rápidas
+  const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false)
+  const [quickActionStep, setQuickActionStep] = useState<'list' | 'form'>('list')
+  const [selectedQuickAction, setSelectedQuickAction] = useState<CockpitQuickAction | null>(null)
   const [activeTimelineEvent, setActiveTimelineEvent] = useState<ViagemEvento | null>(null)
   const [timelineRealModalOpen, setTimelineRealModalOpen] = useState(false)
   const [timelinePlanejadoModalOpen, setTimelinePlanejadoModalOpen] = useState(false)
@@ -361,6 +362,7 @@ export function ViagemDetalheClient({
   const [dieselFinalLitros, setDieselFinalLitros] = useState("")
   const [consumoMedioEditavel, setConsumoMedioEditavel] = useState(() => Number(viagem.veiculo?.meta_consumo || 2.4))
   const [timeTicker, setTimeTicker] = useState(() => Date.now())
+  const [tipoParadaSelecionado, setTipoParadaSelecionado] = useState<'carga' | 'descarga' | 'descanso' | 'parada_operacional' | 'ocorrencia'>('carga')
   const recalculateEtaInFlightRef = useRef(false)
 
   const [eventForm, setEventForm] = useState<EventFormState>({
@@ -377,19 +379,29 @@ export function ViagemDetalheClient({
   const [postosAbastecimento, setPostosAbastecimento] = useState<PostoAbastecimento[]>([])
   const [abastecimentoForm, setAbastecimentoForm] = useState({
     veiculo_id: viagem.veiculo_id || "",
-    posto_modo: "cadastrado" as "cadastrado" | "livre",
-    posto_id: "",
+    inicio_em: "",
+    fim_em: "",
+    local: "",
+    motorista: "",
     hodometro: "",
-    litros: "",
+    hora_thermo_king: "",
+    litros_cavalo: "",
+    litros_thermo_king: "",
     valor_total: "",
-    posto: "",
-    arla: "nao",
-    arla_litros: "",
-    arla_valor: "",
-    ap_refrigerado: "nao",
-    ap_refrigerado_horimetro: "",
-    ap_refrigerado_litros: "",
-    ap_refrigerado_valor: "",
+    abasteceu_arla: "nao" as "sim" | "nao",
+    litros_arla: "",
+    tanque_cheio: "nao" as "sim" | "nao",
+  })
+  const [manutencaoForm, setManutencaoForm] = useState({
+    veiculo_id: viagem.veiculo_id || "",
+    inicio_em: "",
+    local: "",
+    tipo_manutencao: "preventiva" as "preventiva" | "corretiva" | "pneus" | "eletrica" | "motor" | "freios" | "suspensao" | "thermo_king" | "outro",
+    valor_total: "",
+    forma_pagamento: "dinheiro",
+    nota_fiscal: "",
+    hodometro: "",
+    observacao: "",
   })
   const [ocorrenciaForm, setOcorrenciaForm] = useState({
     categoria: "operacional",
@@ -410,6 +422,8 @@ export function ViagemDetalheClient({
     status_documento: "pendente",
     protocolo_documento: "",
   })
+  const [documentacaoQuickActionFile, setDocumentacaoQuickActionFile] = useState<File | null>(null)
+  const [documentacaoQuickActionPreview, setDocumentacaoQuickActionPreview] = useState<string>("")
 
   const [costForm, setCostForm] = useState<CostFormState>({
     data: new Date().toISOString().split("T")[0],
@@ -559,19 +573,18 @@ export function ViagemDetalheClient({
     // Reset abastecimento
     setAbastecimentoForm({
       veiculo_id: viagem.veiculo_id || "",
-      posto_modo: "cadastrado",
-      posto_id: "",
+      inicio_em: "",
+      fim_em: "",
+      local: "",
+      motorista: "",
       hodometro: "",
-      litros: "",
+      hora_thermo_king: "",
+      litros_cavalo: "",
+      litros_thermo_king: "",
       valor_total: "",
-      posto: "",
-      arla: "nao",
-      arla_litros: "",
-      arla_valor: "",
-      ap_refrigerado: "nao",
-      ap_refrigerado_horimetro: "",
-      ap_refrigerado_litros: "",
-      ap_refrigerado_valor: "",
+      abasteceu_arla: "nao",
+      litros_arla: "",
+      tanque_cheio: "nao",
     })
 
     // Reset ocorrência
@@ -655,6 +668,36 @@ export function ViagemDetalheClient({
       setEventoViagemAlvoId(null)
     }
   }, [eventModalOpen])
+
+  // Atualizar eventForm quando selectedQuickAction muda
+  useEffect(() => {
+    if (selectedQuickAction) {
+      setEventForm(prev => ({
+        ...prev,
+        titulo: selectedQuickAction.title,
+        tipo_evento: selectedQuickAction.type as EventoViagemTipo,
+        status_evento: selectedQuickAction.status,
+      }))
+    }
+  }, [selectedQuickAction])
+
+  useEffect(() => {
+    if (selectedQuickAction?.type === 'parada') {
+      const tipoLabels: Record<typeof tipoParadaSelecionado, string> = {
+        carga: 'Carga',
+        descarga: 'Descarga',
+        descanso: 'Descanso',
+        parada_operacional: 'Parada Operacional',
+        ocorrencia: 'Ocorrência'
+      }
+      setEventForm(prev => ({
+        ...prev,
+        titulo: tipoLabels[tipoParadaSelecionado],
+        tipo_evento: tipoParadaSelecionado === 'ocorrencia' ? 'ocorrencia' : 'parada',
+        status_evento: tipoParadaSelecionado === 'ocorrencia' ? 'pendente' : 'em_andamento'
+      }))
+    }
+  }, [tipoParadaSelecionado, selectedQuickAction])
 
   const eventosPlanejados = useMemo(() => eventos.filter((evento) => isEventoPlanejado(evento)), [eventos])
   const eventosRealizados = useMemo(() => eventos.filter((evento) => !isEventoPlanejado(evento)), [eventos])
@@ -1546,35 +1589,32 @@ export function ViagemDetalheClient({
   ])
 
   const smartQuickActions = useMemo(() => {
-    const carregamentoEmAndamento = eventosOrdenados.some(
-      (evento) => evento.status_evento === "em_andamento" && evento.titulo === "Início de carregamento",
-    )
-    const descansoEmAndamento = eventosOrdenados.some(
-      (evento) => evento.status_evento === "em_andamento" && evento.titulo === "Início de descanso",
-    )
-
     return [
       {
-        label: "Partida/Chegada",
+        label: "Partida",
         action: {
-          label: "Partida/Chegada",
+          label: "Partida",
           type: "saida",
           status: "concluido",
-          title: "Partida e chegada",
+          title: "Partida",
         } as CockpitQuickAction,
       },
       {
-        label: carregamentoEmAndamento ? "Finalizar carregamento" : "Iniciar carregamento",
-        action: findQuickActionByTitle(carregamentoEmAndamento ? "Fim de carregamento" : "Início de carregamento"),
+        label: "Chegada",
+        action: {
+          label: "Chegada",
+          type: "chegada",
+          status: "concluido",
+          title: "Chegada",
+        } as CockpitQuickAction,
       },
       {
-        label: descansoEmAndamento ? "Finalizar descanso" : "Iniciar descanso",
-        action: findQuickActionByTitle(descansoEmAndamento ? "Fim de descanso" : "Início de descanso"),
+        label: "Parada",
+        action: findQuickActionByTitle("Parada"),
       },
       { label: "Abastecimento", action: findQuickActionByTitle("Abastecimento") },
-      { label: "Manutenção (ocorrência)", action: findQuickActionByTitle("Manutenção") },
+      { label: "Manutenção", action: findQuickActionByTitle("Manutenção") },
       { label: "Documentação", action: findQuickActionByTitle("Documentação") },
-      { label: "Ocorrência", action: findQuickActionByTitle("Ocorrência") },
     ].filter((item): item is { label: string; action: CockpitQuickAction } => Boolean(item.action))
   }, [eventosOrdenados])
 
@@ -1857,19 +1897,18 @@ export function ViagemDetalheClient({
     if (type === "abastecimento") {
       setAbastecimentoForm({
         veiculo_id: viagemState.veiculo_id || "",
-        posto_modo: "cadastrado",
-        posto_id: "",
+        inicio_em: nowLocal,
+        fim_em: nowLocal,
+        local: "",
+        motorista: "",
         hodometro: "",
-        litros: "",
+        hora_thermo_king: "",
+        litros_cavalo: "",
+        litros_thermo_king: "",
         valor_total: "",
-        posto: "",
-        arla: "nao",
-        arla_litros: "",
-        arla_valor: "",
-        ap_refrigerado: "nao",
-        ap_refrigerado_horimetro: "",
-        ap_refrigerado_litros: "",
-        ap_refrigerado_valor: "",
+        abasteceu_arla: "nao",
+        litros_arla: "",
+        tanque_cheio: "nao",
       })
     }
     if (type === "ocorrencia") {
@@ -1963,15 +2002,14 @@ export function ViagemDetalheClient({
       viagemState.destino_real ||
       viagemState.origem_real ||
       "A DEFINIR"
-    const isPartidaChegadaAction = action.title === "Partida e chegada"
 
     setActiveTimelineEvent(null)
     setEventoLancamentoModo(modo)
     setEventForm({
-      tipo_evento: isPartidaChegadaAction ? "saida" : action.type,
+      tipo_evento: action.type,
       status_evento: modo === "planejado" ? "pendente" : "concluido",
-      titulo: isPartidaChegadaAction ? "Saída" : action.title,
-      local: isPartidaChegadaAction ? origemOperacionalLabel : localPadrao,
+      titulo: action.title,
+      local: action.type === "saida" ? origemOperacionalLabel : localPadrao,
       observacao: modo === "planejado" ? "Planejado por ação rápida." : "Registrado por ação rápida.",
       inicio_em: nowLocal,
       fim_em: nowLocal,
@@ -1979,19 +2017,18 @@ export function ViagemDetalheClient({
     if (action.type === "abastecimento") {
       setAbastecimentoForm({
         veiculo_id: viagemState.veiculo_id || "",
-        posto_modo: "cadastrado",
-        posto_id: "",
+        inicio_em: nowLocal,
+        fim_em: nowLocal,
+        local: localPadrao,
+        motorista: "",
         hodometro: "",
-        litros: "",
+        hora_thermo_king: "",
+        litros_cavalo: "",
+        litros_thermo_king: "",
         valor_total: "",
-        posto: localPadrao,
-        arla: "nao",
-        arla_litros: "",
-        arla_valor: "",
-        ap_refrigerado: "nao",
-        ap_refrigerado_horimetro: "",
-        ap_refrigerado_litros: "",
-        ap_refrigerado_valor: "",
+        abasteceu_arla: "nao",
+        litros_arla: "",
+        tanque_cheio: "nao",
       })
     }
     if (action.type === "ocorrencia") {
@@ -2060,48 +2097,41 @@ export function ViagemDetalheClient({
     }))
   }
 
-  const getAbastecimentoPayloadData = (payload: Record<string, unknown> | null | undefined) => {
+  const getAbastecimentoPayloadData = (payload: Record<string, unknown> | null | undefined): {
+    motorista: string
+    hodometro: string
+    hora_thermo_king: string
+    litros_cavalo: string
+    litros_thermo_king: string
+    valor_total: string
+    abasteceu_arla: "sim" | "nao"
+    litros_arla: string
+    tanque_cheio: "sim" | "nao"
+  } => {
     if (!payload) {
       return {
-        posto_modo: "cadastrado" as "cadastrado" | "livre",
-        posto_id: "",
+        motorista: "",
         hodometro: "",
-        litros: "",
+        hora_thermo_king: "",
+        litros_cavalo: "",
+        litros_thermo_king: "",
         valor_total: "",
-        posto: "",
-        arla: "nao",
-        arla_litros: "",
-        arla_valor: "",
-        ap_refrigerado: "nao",
-        ap_refrigerado_horimetro: "",
-        ap_refrigerado_litros: "",
-        ap_refrigerado_valor: "",
+        abasteceu_arla: "nao",
+        litros_arla: "",
+        tanque_cheio: "nao",
       }
     }
 
     return {
-      posto_modo: payload.posto_modo === "livre" ? "livre" : (String(payload.posto_id || "") ? "cadastrado" : "livre"),
-      posto_id: String(payload.posto_id || ""),
+      motorista: String(payload.motorista || ""),
       hodometro: payload.hodometro !== undefined && payload.hodometro !== null ? String(payload.hodometro) : "",
-      litros: payload.litros !== undefined && payload.litros !== null ? String(payload.litros) : "",
+      hora_thermo_king: payload.hora_thermo_king !== undefined && payload.hora_thermo_king !== null ? String(payload.hora_thermo_king) : "",
+      litros_cavalo: payload.litros_cavalo !== undefined && payload.litros_cavalo !== null ? String(payload.litros_cavalo) : "",
+      litros_thermo_king: payload.litros_thermo_king !== undefined && payload.litros_thermo_king !== null ? String(payload.litros_thermo_king) : "",
       valor_total: payload.valor_total !== undefined && payload.valor_total !== null ? String(payload.valor_total) : "",
-      posto: String(payload.posto || ""),
-      arla: payload.arla === "sim" ? "sim" : "nao",
-      arla_litros: payload.arla_litros !== undefined && payload.arla_litros !== null ? String(payload.arla_litros) : "",
-      arla_valor: payload.arla_valor !== undefined && payload.arla_valor !== null ? String(payload.arla_valor) : "",
-      ap_refrigerado: payload.ap_refrigerado === "sim" ? "sim" : "nao",
-      ap_refrigerado_horimetro:
-        payload.ap_refrigerado_horimetro !== undefined && payload.ap_refrigerado_horimetro !== null
-          ? String(payload.ap_refrigerado_horimetro)
-          : "",
-      ap_refrigerado_litros:
-        payload.ap_refrigerado_litros !== undefined && payload.ap_refrigerado_litros !== null
-          ? String(payload.ap_refrigerado_litros)
-          : "",
-      ap_refrigerado_valor:
-        payload.ap_refrigerado_valor !== undefined && payload.ap_refrigerado_valor !== null
-          ? String(payload.ap_refrigerado_valor)
-          : "",
+      abasteceu_arla: payload.abasteceu_arla === "sim" ? "sim" : "nao",
+      litros_arla: payload.litros_arla !== undefined && payload.litros_arla !== null ? String(payload.litros_arla) : "",
+      tanque_cheio: payload.tanque_cheio === "sim" ? "sim" : "nao",
     }
   }
 
@@ -2309,38 +2339,20 @@ export function ViagemDetalheClient({
     }
 
     if (isAbastecimentoSelecionado) {
-      if (!eventForm.inicio_em || !eventForm.local || !abastecimentoForm.hodometro || !abastecimentoForm.litros || !abastecimentoForm.valor_total) {
-        alert("Para abastecimento, preencha data/hora, local (cidade/UF), hodômetro, litros e valor total.")
+      if (!abastecimentoForm.inicio_em || !abastecimentoForm.local || !abastecimentoForm.hodometro || !abastecimentoForm.litros_cavalo || !abastecimentoForm.valor_total) {
+        alert("Para abastecimento, preencha Data/Hora, Local, Hodômetro, Litros do cavalo e Valor total.")
         setLoading(false)
         return
       }
 
-      if (abastecimentoForm.arla === "sim" && !abastecimentoForm.arla_valor) {
-        alert("Informe o valor de ARLA quando selecionado como SIM.")
+      if (Number(abastecimentoForm.litros_thermo_king) > 0 && !abastecimentoForm.hora_thermo_king) {
+        alert("Informe a Hora Thermo King quando houver abastecimento de Thermo King.")
         setLoading(false)
         return
       }
 
-      if (abastecimentoForm.arla === "sim" && !abastecimentoForm.arla_litros) {
+      if (abastecimentoForm.abasteceu_arla === "sim" && !abastecimentoForm.litros_arla) {
         alert("Informe os litros de ARLA quando selecionado como SIM.")
-        setLoading(false)
-        return
-      }
-
-      if (abastecimentoForm.ap_refrigerado === "sim" && !abastecimentoForm.ap_refrigerado_valor) {
-        alert("Informe o valor de Termoking quando selecionado como SIM.")
-        setLoading(false)
-        return
-      }
-
-      if (abastecimentoForm.ap_refrigerado === "sim" && !abastecimentoForm.ap_refrigerado_horimetro) {
-        alert("Informe o horímetro de Termoking quando selecionado como SIM.")
-        setLoading(false)
-        return
-      }
-
-      if (abastecimentoForm.ap_refrigerado === "sim" && !abastecimentoForm.ap_refrigerado_litros) {
-        alert("Informe os litros de Termoking quando selecionado como SIM.")
         setLoading(false)
         return
       }
@@ -2366,7 +2378,7 @@ export function ViagemDetalheClient({
           : quickActionPartidaChegadaAtiva && marcoAtual === "passagem"
             ? localPassagem
           : isAbastecimentoSelecionado
-            ? eventForm.local || abastecimentoForm.posto || postosAbastecimento.find((item) => item.id === abastecimentoForm.posto_id)?.nome || null
+            ? abastecimentoForm.local || null
           : eventForm.local || null
     const payloadMetaBase =
       {
@@ -2381,32 +2393,16 @@ export function ViagemDetalheClient({
 
     const payloadAbastecimento = isAbastecimentoSelecionado
       ? {
-          posto_modo: abastecimentoForm.posto_modo,
           veiculo_id: abastecimentoForm.veiculo_id,
-          posto_id: abastecimentoForm.posto_id || null,
           hodometro: Number(abastecimentoForm.hodometro || 0),
-          litros: Number(abastecimentoForm.litros || 0),
+          litros_cavalo: Number(abastecimentoForm.litros_cavalo || 0),
+          litros_thermo_king: Number(abastecimentoForm.litros_thermo_king || 0),
+          hora_thermo_king: Number(abastecimentoForm.hora_thermo_king || 0),
           valor_total: Number(abastecimentoForm.valor_total || 0),
-          arla: abastecimentoForm.arla,
-          arla_litros: abastecimentoForm.arla === "sim" ? Number(abastecimentoForm.arla_litros || 0) : null,
-          arla_valor: abastecimentoForm.arla === "sim" ? Number(abastecimentoForm.arla_valor || 0) : null,
-          ap_refrigerado: abastecimentoForm.ap_refrigerado,
-          ap_refrigerado_horimetro:
-            abastecimentoForm.ap_refrigerado === "sim"
-              ? Number(abastecimentoForm.ap_refrigerado_horimetro || 0)
-              : null,
-          ap_refrigerado_litros:
-            abastecimentoForm.ap_refrigerado === "sim"
-              ? Number(abastecimentoForm.ap_refrigerado_litros || 0)
-              : null,
-          ap_refrigerado_valor:
-            abastecimentoForm.ap_refrigerado === "sim"
-              ? Number(abastecimentoForm.ap_refrigerado_valor || 0)
-              : null,
-          posto:
-            abastecimentoForm.posto ||
-            postosAbastecimento.find((item) => item.id === abastecimentoForm.posto_id)?.nome ||
-            null,
+          abasteceu_arla: abastecimentoForm.abasteceu_arla,
+          litros_arla: abastecimentoForm.abasteceu_arla === "sim" ? Number(abastecimentoForm.litros_arla || 0) : null,
+          tanque_cheio: abastecimentoForm.tanque_cheio,
+          motorista: abastecimentoForm.motorista || null,
         }
       : {}
 
@@ -2558,6 +2554,8 @@ export function ViagemDetalheClient({
         })
         .select("*")
         .single()
+
+      console.log("✅ Evento inserido:", { data, error, payload })
 
       if (!error && data) {
         if (isAbastecimentoSelecionado) {
@@ -3286,19 +3284,18 @@ export function ViagemDetalheClient({
                                     const payloadDocumentacao = getDocumentacaoPayloadData((evento.source.payload || null) as Record<string, unknown> | null)
                                     setAbastecimentoForm({
                                       veiculo_id: String((evento.source.payload as Record<string, unknown> | null)?.veiculo_id || viagemState.veiculo_id || ""),
-                                      posto_modo: payloadData.posto_modo,
-                                      posto_id: payloadData.posto_id,
+                                      inicio_em: toDatetimeLocal(evento.source.ocorrido_em),
+                                      fim_em: toDatetimeLocal(evento.source.previsto_em || evento.source.ocorrido_em),
+                                      local: evento.source.local || "",
+                                      motorista: payloadData.motorista,
                                       hodometro: payloadData.hodometro,
-                                      litros: payloadData.litros,
+                                      hora_thermo_king: payloadData.hora_thermo_king,
+                                      litros_cavalo: payloadData.litros_cavalo,
+                                      litros_thermo_king: payloadData.litros_thermo_king,
                                       valor_total: payloadData.valor_total,
-                                      posto: payloadData.posto || evento.source.local || "",
-                                      arla: payloadData.arla === "sim" ? "sim" : "nao",
-                                      arla_litros: payloadData.arla_litros,
-                                      arla_valor: payloadData.arla_valor,
-                                      ap_refrigerado: payloadData.ap_refrigerado === "sim" ? "sim" : "nao",
-                                      ap_refrigerado_horimetro: payloadData.ap_refrigerado_horimetro,
-                                      ap_refrigerado_litros: payloadData.ap_refrigerado_litros,
-                                      ap_refrigerado_valor: payloadData.ap_refrigerado_valor,
+                                      abasteceu_arla: payloadData.abasteceu_arla === "sim" ? "sim" : "nao",
+                                      litros_arla: payloadData.litros_arla,
+                                      tanque_cheio: payloadData.tanque_cheio === "sim" ? "sim" : "nao",
                                     })
                                     setOcorrenciaForm(payloadOcorrencia)
                                     setDocumentacaoEventoForm(payloadDocumentacao)
@@ -3363,18 +3360,455 @@ export function ViagemDetalheClient({
                       </SelectContent>
                     </Select>
                   </div>
-                  {smartQuickActions.map(({ label, action }) => (
-                    <Button
-                      key={label}
-                      type="button"
-                      variant="outline"
-                      className="w-full justify-start"
-                      onClick={() => handleQuickActionRegister(action, "realizado")}
-                      disabled={loading || !temViagemAbertaParaRegistro}
-                    >
-                      {label}
-                    </Button>
-                  ))}
+                  {/* NOVO: Botão único para abrir modal de ações rápidas */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start font-semibold"
+                    onClick={() => {
+                      setQuickActionsModalOpen(true)
+                      setQuickActionStep('list')
+                      setSelectedQuickAction(null)
+                      setTipoParadaSelecionado('carga')
+                      setDocumentacaoQuickActionFile(null)
+                      setDocumentacaoQuickActionPreview('')
+                    }}
+                    disabled={loading || !temViagemAbertaParaRegistro}
+                  >
+                    Ações rápidas
+                  </Button>
+
+                  {/* Modal de ações rápidas em estilo wizard/tab horizontal */}
+                  <Dialog open={quickActionsModalOpen} onOpenChange={(open) => {
+                    setQuickActionsModalOpen(open)
+                    if (!open) {
+                      setTipoParadaSelecionado('carga')
+                      setDocumentacaoQuickActionFile(null)
+                      setDocumentacaoQuickActionPreview('')
+                    }
+                  }}>
+                    <DialogContent className="!p-0 !gap-0" style={{ maxWidth: '1100px', width: '95%', height: '75vh', display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+                        <DialogHeader className="px-6 pt-5 pb-2 border-b shrink-0">
+                          <DialogTitle className="text-xl font-bold">Ações rápidas</DialogTitle>
+                        </DialogHeader>
+                        {/* Abas fixas no topo */}
+                        <div className="flex justify-center gap-1 border-b px-6 py-2 text-sm font-semibold shrink-0 bg-background overflow-x-auto">
+                          {smartQuickActions.map(({ label, action }) => (
+                            <button
+                              key={action.title}
+                              type="button"
+                              className={`px-3 py-1 border-b-2 transition-colors whitespace-nowrap text-xs ${selectedQuickAction?.title === action.title ? 'border-primary text-primary font-bold' : 'border-transparent text-muted-foreground hover:text-primary'}`}
+                              onClick={() => setSelectedQuickAction(action)}
+                              disabled={loading || !temViagemAbertaParaRegistro}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Corpo do formulário com rolagem interna */}
+                        <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                          <div style={{ width: '100%', maxWidth: '700px' }}>
+                            {selectedQuickAction && selectedQuickAction.type === 'abastecimento' && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="md:col-span-2 border-b pb-2 mb-2">
+                                  <h3 className="text-xs font-bold text-primary">📋 IDENTIFICAÇÃO BÁSICA</h3>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Data/Hora Início *</Label>
+                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.inicio_em} onChange={e => setAbastecimentoForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Data/Hora Fim</Label>
+                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.fim_em} onChange={e => setAbastecimentoForm(f => ({ ...f, fim_em: e.target.value }))} />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Local (cidade/posto) *</Label>
+                                  <Input className="text-sm" value={abastecimentoForm.local} onChange={e => setAbastecimentoForm(f => ({ ...f, local: e.target.value }))} placeholder="Ex: Aurora/PA" required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Motorista</Label>
+                                  <Input className="text-sm" value={abastecimentoForm.motorista} onChange={e => setAbastecimentoForm(f => ({ ...f, motorista: e.target.value }))} placeholder="Nome do motorista" />
+                                </div>
+                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
+                                  <h3 className="text-xs font-bold text-primary">⚙️ CONTROLE TÉCNICO (ESSENCIAL)</h3>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Hodômetro (km) *</Label>
+                                  <Input type="number" className="text-sm" value={abastecimentoForm.hodometro} onChange={e => setAbastecimentoForm(f => ({ ...f, hodometro: e.target.value }))} placeholder="245890" required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Tanque cheio? *</Label>
+                                  <Select value={abastecimentoForm.tanque_cheio} onValueChange={v => setAbastecimentoForm(f => ({ ...f, tanque_cheio: v as 'sim' | 'nao' }))}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="nao">Não</SelectItem>
+                                      <SelectItem value="sim">✅ Sim</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Litros abastecidos – Cavalo *</Label>
+                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.litros_cavalo} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_cavalo: e.target.value }))} placeholder="450" required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Litros abastecidos – Thermo King</Label>
+                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.litros_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_thermo_king: e.target.value }))} placeholder="0" />
+                                </div>
+                                {Number(abastecimentoForm.litros_thermo_king) > 0 && (
+                                  <div>
+                                    <Label className="text-xs font-semibold">Hora Thermo King (h) *</Label>
+                                    <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.hora_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, hora_thermo_king: e.target.value }))} placeholder="Ex: 245.5" required />
+                                  </div>
+                                )}
+                                <div>
+                                  <Label className="text-xs font-semibold">Valor total (R$) *</Label>
+                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.valor_total} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_total: e.target.value }))} placeholder="0.00" required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Abasteceu ARLA? (Sim/Não)</Label>
+                                  <Select value={abastecimentoForm.abasteceu_arla} onValueChange={v => setAbastecimentoForm(f => ({ ...f, abasteceu_arla: v as 'sim' | 'nao' }))}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="nao">Não</SelectItem>
+                                      <SelectItem value="sim">Sim</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {abastecimentoForm.abasteceu_arla === 'sim' && (
+                                  <div>
+                                    <Label className="text-xs font-semibold">Litros ARLA</Label>
+                                    <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.litros_arla} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_arla: e.target.value }))} placeholder="0.00" />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {selectedQuickAction && selectedQuickAction.type === 'ocorrencia' && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                  <Label className="text-xs font-semibold">Data/Hora</Label>
+                                  <Input type="datetime-local" className="text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Local</Label>
+                                  <Input className="text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Categoria</Label>
+                                  <Input className="text-sm" value={ocorrenciaForm.categoria} onChange={e => setOcorrenciaForm(f => ({ ...f, categoria: e.target.value }))} placeholder="Ex: Acidente, Pane" required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Severidade</Label>
+                                  <Select value={ocorrenciaForm.severidade} onValueChange={v => setOcorrenciaForm(f => ({ ...f, severidade: v }))}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="baixa">Baixa</SelectItem>
+                                      <SelectItem value="media">Média</SelectItem>
+                                      <SelectItem value="alta">Alta</SelectItem>
+                                      <SelectItem value="critica">Crítica</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Houve Parada?</Label>
+                                  <Select value={ocorrenciaForm.houve_parada} onValueChange={v => setOcorrenciaForm(f => ({ ...f, houve_parada: v }))}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="nao">Não</SelectItem>
+                                      <SelectItem value="sim">Sim</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {ocorrenciaForm.houve_parada === 'sim' && (
+                                  <div>
+                                    <Label className="text-xs font-semibold">Tempo Parado (min)</Label>
+                                    <Input type="number" className="text-sm" value={ocorrenciaForm.tempo_parado_min} onChange={e => setOcorrenciaForm(f => ({ ...f, tempo_parado_min: e.target.value }))} />
+                                  </div>
+                                )}
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Observação</Label>
+                                  <Textarea className="text-sm" rows={2} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Ação Imediata</Label>
+                                  <Textarea className="text-sm" rows={2} value={ocorrenciaForm.acao_imediata} onChange={e => setOcorrenciaForm(f => ({ ...f, acao_imediata: e.target.value }))} />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Responsável Ação</Label>
+                                  <Input className="text-sm" value={ocorrenciaForm.responsavel_acao} onChange={e => setOcorrenciaForm(f => ({ ...f, responsavel_acao: e.target.value }))} />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Contato</Label>
+                                  <Input className="text-sm" value={ocorrenciaForm.contato} onChange={e => setOcorrenciaForm(f => ({ ...f, contato: e.target.value }))} placeholder="Telefone/Email" />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Prazo Solução</Label>
+                                  <Input type="datetime-local" className="text-sm" value={ocorrenciaForm.prazo_solucao} onChange={e => setOcorrenciaForm(f => ({ ...f, prazo_solucao: e.target.value }))} />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Protocolo</Label>
+                                  <Input className="text-sm" value={ocorrenciaForm.protocolo} onChange={e => setOcorrenciaForm(f => ({ ...f, protocolo: e.target.value }))} placeholder="Número de protocolo" />
+                                </div>
+                              </div>
+                            )}
+                            {selectedQuickAction && selectedQuickAction.type === 'chegada' && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Data/Hora de chegada</Label>
+                                  <Input type="datetime-local" className="text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Local de chegada</Label>
+                                  <Input className="text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Observação</Label>
+                                  <Textarea className="text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} />
+                                </div>
+                              </div>
+                            )}
+                            {selectedQuickAction && selectedQuickAction.type === 'saida' && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Data/Hora de saída</Label>
+                                  <Input type="datetime-local" className="text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Local de origem</Label>
+                                  <Input className="text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Observação</Label>
+                                  <Textarea className="text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} />
+                                </div>
+                              </div>
+                            )}
+                            {selectedQuickAction && selectedQuickAction.type === 'parada' && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Tipo de Parada *</Label>
+                                  <Select value={tipoParadaSelecionado} onValueChange={v => setTipoParadaSelecionado(v as any)}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="carga">Carga</SelectItem>
+                                      <SelectItem value="descarga">Descarga</SelectItem>
+                                      <SelectItem value="descanso">Descanso</SelectItem>
+                                      <SelectItem value="parada_operacional">Parada Operacional</SelectItem>
+                                      <SelectItem value="ocorrencia">Ocorrência</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Data/Hora início</Label>
+                                  <Input type="datetime-local" className="text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Data/Hora fim</Label>
+                                  <Input type="datetime-local" className="text-sm" value={eventForm.fim_em} onChange={e => setEventForm(f => ({ ...f, fim_em: e.target.value }))} />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Local</Label>
+                                  <Input className="text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} required />
+                                </div>
+                                {tipoParadaSelecionado === 'ocorrencia' && (
+                                  <>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Categoria</Label>
+                                      <Input className="text-sm" value={ocorrenciaForm.categoria} onChange={e => setOcorrenciaForm(f => ({ ...f, categoria: e.target.value }))} placeholder="Ex: Acidente, Pane" required />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Severidade</Label>
+                                      <Select value={ocorrenciaForm.severidade} onValueChange={v => setOcorrenciaForm(f => ({ ...f, severidade: v }))}>
+                                        <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="baixa">Baixa</SelectItem>
+                                          <SelectItem value="media">Média</SelectItem>
+                                          <SelectItem value="alta">Alta</SelectItem>
+                                          <SelectItem value="critica">Crítica</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Houve Parada?</Label>
+                                      <Select value={ocorrenciaForm.houve_parada} onValueChange={v => setOcorrenciaForm(f => ({ ...f, houve_parada: v }))}>
+                                        <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="nao">Não</SelectItem>
+                                          <SelectItem value="sim">Sim</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  </>
+                                )}
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Observação</Label>
+                                  <Textarea className="text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} />
+                                </div>
+                              </div>
+                            )}
+                            {selectedQuickAction && selectedQuickAction.type === 'manutencao' && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="md:col-span-2 border-b pb-2 mb-2">
+                                  <h3 className="text-xs font-bold text-primary">🔧 INFORMAÇÕES DE MANUTENÇÃO</h3>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Data/Hora *</Label>
+                                  <Input type="datetime-local" className="text-sm" value={manutencaoForm.inicio_em} onChange={e => setManutencaoForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Local *</Label>
+                                  <Input className="text-sm" value={manutencaoForm.local} onChange={e => setManutencaoForm(f => ({ ...f, local: e.target.value }))} placeholder="Ex: Xinguara" required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Tipo de manutenção *</Label>
+                                  <Select value={manutencaoForm.tipo_manutencao} onValueChange={v => setManutencaoForm(f => ({ ...f, tipo_manutencao: v as any }))}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="preventiva">Preventiva</SelectItem>
+                                      <SelectItem value="corretiva">Corretiva</SelectItem>
+                                      <SelectItem value="pneus">Pneus</SelectItem>
+                                      <SelectItem value="eletrica">Elétrica</SelectItem>
+                                      <SelectItem value="motor">Motor</SelectItem>
+                                      <SelectItem value="freios">Freios</SelectItem>
+                                      <SelectItem value="suspensao">Suspensão</SelectItem>
+                                      <SelectItem value="thermo_king">Thermo King</SelectItem>
+                                      <SelectItem value="outro">Outro</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
+                                  <h3 className="text-xs font-bold text-primary">💰 INFORMAÇÕES FINANCEIRAS</h3>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Valor total (R$) *</Label>
+                                  <Input type="number" step="0.01" className="text-sm" value={manutencaoForm.valor_total} onChange={e => setManutencaoForm(f => ({ ...f, valor_total: e.target.value }))} placeholder="0.00" required />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Forma de pagamento</Label>
+                                  <Select value={manutencaoForm.forma_pagamento} onValueChange={v => setManutencaoForm(f => ({ ...f, forma_pagamento: v }))}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="dinheiro">Dinheiro</SelectItem>
+                                      <SelectItem value="cartao">Cartão</SelectItem>
+                                      <SelectItem value="boleto">Boleto</SelectItem>
+                                      <SelectItem value="transferencia">Transferência</SelectItem>
+                                      <SelectItem value="outro">Outro</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Nota fiscal</Label>
+                                  <Input className="text-sm" value={manutencaoForm.nota_fiscal} onChange={e => setManutencaoForm(f => ({ ...f, nota_fiscal: e.target.value }))} placeholder="Número da NF" />
+                                </div>
+                                <div className="md:col-span-2 border-b pb-2 mb-2">
+                                  <h3 className="text-xs font-bold text-primary">⚙️ INFORMAÇÕES TÉCNICAS</h3>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Hodômetro (km)</Label>
+                                  <Input type="number" className="text-sm" value={manutencaoForm.hodometro} onChange={e => setManutencaoForm(f => ({ ...f, hodometro: e.target.value }))} placeholder="246200" />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Observação</Label>
+                                  <Textarea className="text-sm" rows={2} value={manutencaoForm.observacao} onChange={e => setManutencaoForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Detalhes da manutenção realizada" />
+                                </div>
+                              </div>
+                            )}
+                            {selectedQuickAction && selectedQuickAction.title === 'Documentação' && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Data/Hora *</Label>
+                                  <Input type="datetime-local" className="text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Local *</Label>
+                                  <Input className="text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} required />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Observação</Label>
+                                  <Textarea className="text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Anexar arquivo</Label>
+                                  <Input 
+                                    type="file" 
+                                    className="text-sm" 
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0]
+                                      if (file) {
+                                        setDocumentacaoQuickActionFile(file)
+                                        const reader = new FileReader()
+                                        reader.onload = (event) => {
+                                          setDocumentacaoQuickActionPreview(event.target?.result as string)
+                                        }
+                                        reader.readAsDataURL(file)
+                                      }
+                                    }}
+                                  />
+                                </div>
+                                {documentacaoQuickActionPreview && (
+                                  <div className="md:col-span-2 border rounded p-3 bg-muted/50">
+                                    <Label className="text-xs font-semibold mb-2 block">Arquivo anexado:</Label>
+                                    {documentacaoQuickActionFile?.type.startsWith('image/') ? (
+                                      <img src={documentacaoQuickActionPreview} alt="preview" className="max-w-full max-h-48 rounded" />
+                                    ) : (
+                                      <div className="flex items-center gap-2 text-sm">
+                                        <div className="w-10 h-10 bg-primary/20 rounded flex items-center justify-center">
+                                          📄
+                                        </div>
+                                        <div>
+                                          <p className="font-semibold">{documentacaoQuickActionFile?.name}</p>
+                                          <p className="text-xs text-muted-foreground">{(documentacaoQuickActionFile?.size || 0) / 1024 > 1024 ? `${((documentacaoQuickActionFile?.size || 0) / 1024 / 1024).toFixed(2)} MB` : `${((documentacaoQuickActionFile?.size || 0) / 1024).toFixed(2)} KB`}</p>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {/* Botões fixos na base */}
+                        <div style={{ borderTop: '1px solid var(--border)', background: 'var(--background)', padding: '1rem 1.5rem', display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            className="px-4 py-1 rounded bg-muted text-muted-foreground hover:bg-primary/10 font-semibold disabled:opacity-50 text-sm transition-colors"
+                            onClick={() => {
+                              if (!selectedQuickAction) return;
+                              const idx = smartQuickActions.findIndex(({ action }) => action.title === selectedQuickAction.title);
+                              if (idx > 0) setSelectedQuickAction(smartQuickActions[idx - 1].action);
+                            }}
+                            disabled={!selectedQuickAction || smartQuickActions.findIndex(({ action }) => action.title === selectedQuickAction.title) === 0}
+                          >← Anterior</button>
+                          <Button 
+                            type="button" 
+                            onClick={async () => { 
+                              if (!selectedQuickAction) {
+                                alert("Selecione uma ação para continuar.")
+                                return
+                              }
+                              await handleSaveEvent()
+                              setQuickActionsModalOpen(false)
+                            }} 
+                            disabled={!selectedQuickAction || loading} 
+                            style={{ flex: 1, margin: '0 0.5rem', padding: '0.5rem' }} 
+                            className="text-sm font-semibold"
+                          >
+                            {loading ? "Salvando..." : "Salvar"}
+                          </Button>
+                          <button
+                            type="button"
+                            className="px-4 py-1 rounded bg-muted text-muted-foreground hover:bg-primary/10 font-semibold disabled:opacity-50 text-sm transition-colors"
+                            onClick={() => {
+                              if (!selectedQuickAction) return;
+                              const idx = smartQuickActions.findIndex(({ action }) => action.title === selectedQuickAction.title);
+                              if (idx < smartQuickActions.length - 1) setSelectedQuickAction(smartQuickActions[idx + 1].action);
+                            }}
+                            disabled={!selectedQuickAction || smartQuickActions.findIndex(({ action }) => action.title === selectedQuickAction.title) === smartQuickActions.length - 1}
+                          >Próximo →</button>
+                        </div>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
                   {subViagensCarregadas && subViagensCarregadas.length > 0 && (
                     <Button
                       type="button"
@@ -4020,236 +4454,9 @@ export function ViagemDetalheClient({
             </div>
 
             {isAbastecimentoSelecionado && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-md border border-border/60 p-3">
-                <div>
-                  <Label>Veículo *</Label>
-                  <Input
-                    value={`${viagemState.veiculo?.placa_cavalo || "-"}${viagemState.veiculo?.modelo ? ` - ${viagemState.veiculo.modelo}` : ""}`}
-                    disabled
-                  />
-                </div>
-                <div>
-                  <Label>Data/hora *</Label>
-                  <Input
-                    type="datetime-local"
-                    value={eventForm.inicio_em}
-                    onChange={(event) => {
-                      const value = event.target.value
-                      setEventForm((prev) => ({ ...prev, inicio_em: value, fim_em: value || prev.fim_em }))
-                    }}
-                  />
-                </div>
-                <div>
-                  <Label>Local (cidade/UF) *</Label>
-                  <Input
-                    value={eventForm.local}
-                    placeholder="Ex.: Rondonópolis/MT"
-                    onChange={(event) => setEventForm((prev) => ({ ...prev, local: event.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>Hodômetro (km) *</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={abastecimentoForm.hodometro}
-                    onChange={(event) => setAbastecimentoForm((prev) => ({ ...prev, hodometro: event.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>Litros *</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={abastecimentoForm.litros}
-                    onChange={(event) => setAbastecimentoForm((prev) => ({ ...prev, litros: event.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>Valor Total (R$) *</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={abastecimentoForm.valor_total}
-                    onChange={(event) => setAbastecimentoForm((prev) => ({ ...prev, valor_total: event.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>Posto (origem)</Label>
-                  <Select
-                    value={abastecimentoForm.posto_modo}
-                    onValueChange={(value: "cadastrado" | "livre") =>
-                      setAbastecimentoForm((prev) => ({
-                        ...prev,
-                        posto_modo: value,
-                        posto_id: value === "cadastrado" ? prev.posto_id : "",
-                        posto: value === "livre" ? prev.posto : "",
-                      }))
-                    }
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="cadastrado">Posto cadastrado</SelectItem>
-                      <SelectItem value="livre">Posto livre</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {abastecimentoForm.posto_modo === "cadastrado" ? (
-                  <div>
-                    <Label>Posto cadastrado</Label>
-                    <Select
-                      value={abastecimentoForm.posto_id || undefined}
-                      onValueChange={(value) => {
-                        const postoSelecionado = postosAbastecimento.find((posto) => posto.id === value)
-                        setAbastecimentoForm((prev) => ({
-                          ...prev,
-                          posto_id: value,
-                          posto: postoSelecionado?.nome || "",
-                        }))
-                      }}
-                    >
-                      <SelectTrigger><SelectValue placeholder={postosAbastecimento.length > 0 ? "Selecione um posto" : "Nenhum posto cadastrado"} /></SelectTrigger>
-                      <SelectContent>
-                        {postosAbastecimento.map((posto) => (
-                          <SelectItem key={posto.id} value={posto.id}>
-                            {posto.nome}{posto.localidade ? ` • ${posto.localidade}` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : (
-                  <div>
-                    <Label>Nome do posto (opcional)</Label>
-                    <Input
-                      value={abastecimentoForm.posto}
-                      placeholder="Ex.: Posto BR 163"
-                      onChange={(event) => {
-                        const value = event.target.value
-                        setAbastecimentoForm((prev) => ({ ...prev, posto: value }))
-                      }}
-                    />
-                  </div>
-                )}
-                <div className="md:col-span-2 rounded-md border border-border/60 p-3">
-                  <details>
-                    <summary className="cursor-pointer text-sm font-medium">Avançado (opcional)</summary>
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div>
-                        <Label>ARLA</Label>
-                        <Select
-                          value={abastecimentoForm.arla}
-                          onValueChange={(value: "sim" | "nao") =>
-                            setAbastecimentoForm((prev) => ({
-                              ...prev,
-                              arla: value,
-                              arla_litros: value === "sim" ? prev.arla_litros : "",
-                              arla_valor: value === "sim" ? prev.arla_valor : "",
-                            }))
-                          }
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="nao">Não</SelectItem>
-                            <SelectItem value="sim">Sim</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {abastecimentoForm.arla === "sim" && (
-                        <>
-                          <div>
-                            <Label>ARLA litros</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={abastecimentoForm.arla_litros}
-                              onChange={(event) =>
-                                setAbastecimentoForm((prev) => ({ ...prev, arla_litros: event.target.value }))
-                              }
-                            />
-                          </div>
-                          <div>
-                            <Label>ARLA valor total (R$)</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={abastecimentoForm.arla_valor}
-                              onChange={(event) =>
-                                setAbastecimentoForm((prev) => ({ ...prev, arla_valor: event.target.value }))
-                              }
-                            />
-                          </div>
-                        </>
-                      )}
-                      <div>
-                        <Label>ThermoKing</Label>
-                        <Select
-                          value={abastecimentoForm.ap_refrigerado}
-                          onValueChange={(value: "sim" | "nao") =>
-                            setAbastecimentoForm((prev) => ({
-                              ...prev,
-                              ap_refrigerado: value,
-                              ap_refrigerado_horimetro: value === "sim" ? prev.ap_refrigerado_horimetro : "",
-                              ap_refrigerado_litros: value === "sim" ? prev.ap_refrigerado_litros : "",
-                              ap_refrigerado_valor: value === "sim" ? prev.ap_refrigerado_valor : "",
-                            }))
-                          }
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="nao">Não</SelectItem>
-                            <SelectItem value="sim">Sim</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {abastecimentoForm.ap_refrigerado === "sim" && (
-                        <>
-                          <div>
-                            <Label>ThermoKing litros</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={abastecimentoForm.ap_refrigerado_litros}
-                              onChange={(event) =>
-                                setAbastecimentoForm((prev) => ({ ...prev, ap_refrigerado_litros: event.target.value }))
-                              }
-                            />
-                          </div>
-                          <div>
-                            <Label>ThermoKing horímetro</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={abastecimentoForm.ap_refrigerado_horimetro}
-                              onChange={(event) =>
-                                setAbastecimentoForm((prev) => ({ ...prev, ap_refrigerado_horimetro: event.target.value }))
-                              }
-                            />
-                          </div>
-                          <div>
-                            <Label>ThermoKing valor total (R$)</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={abastecimentoForm.ap_refrigerado_valor}
-                              onChange={(event) =>
-                                setAbastecimentoForm((prev) => ({ ...prev, ap_refrigerado_valor: event.target.value }))
-                              }
-                            />
-                          </div>
-                        </>
-                      )}
-                      <div className="md:col-span-2">
-                        <Label>Anexo/Nota</Label>
-                        <Textarea
-                          value={eventForm.observacao}
-                          placeholder="Observações do abastecimento ou referência de anexo/nota"
-                          onChange={(event) => setEventForm((prev) => ({ ...prev, observacao: event.target.value }))}
-                        />
-                      </div>
-                    </div>
-                  </details>
-                </div>
+              <div className="bg-amber-50 border border-amber-200 rounded p-4">
+                <p className="text-sm font-semibold text-amber-900 mb-2">⚠️ Aba de Abastecimento em Refatoração</p>
+                <p className="text-sm text-amber-800">Esta seção está sendo refatorada para suportar a nova estrutura de abastecimento com Cavalo, Thermo King e ARLA separados. Use a modal de "Ações Rápidas" para registrar abastecimentos.</p>
               </div>
             )}
 
@@ -4616,7 +4823,7 @@ export function ViagemDetalheClient({
                           Status: <span>{subViagem.status}</span>
                         </p>
                       </div>
-                      {subViagem.status === "Fechada" && <Badge variant="secondary" className="ml-2">Fechada</Badge>}
+                      {normalizeViagemStatus(subViagem.status) === "Concluida" && <Badge variant="secondary" className="ml-2">Fechada</Badge>}
                     </div>
                   </Button>
                 ))
