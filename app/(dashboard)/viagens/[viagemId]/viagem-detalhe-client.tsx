@@ -914,6 +914,49 @@ export function ViagemDetalheClient({
     }
   }, [custos, eventosRealizados])
 
+  const custosAbastecimentoPorViagemId = useMemo(() => {
+    const mapa = new Map<string, number>()
+
+    // Prioriza valor_total no payload do evento de abastecimento.
+    eventosRealizados
+      .filter((evento) => evento.tipo_evento === "abastecimento")
+      .forEach((evento) => {
+        const viagemId = evento.viagem_id
+        if (!viagemId) return
+        const payload = (evento.payload || {}) as Record<string, unknown>
+        const valorTotal = Number(payload.valor_total || 0)
+        mapa.set(viagemId, (mapa.get(viagemId) || 0) + Math.max(0, valorTotal))
+      })
+
+    // Fallback: se não houver payload, usa custos categoria Diesel por viagem.
+    custos
+      .filter((item) => normalizeCategoria(item.categoria) === "Diesel")
+      .forEach((item) => {
+        const viagemId = item.viagem_id
+        if (!viagemId) return
+        if ((mapa.get(viagemId) || 0) > 0) return
+        mapa.set(viagemId, (mapa.get(viagemId) || 0) + Math.max(0, Number(item.valor || 0)))
+      })
+
+    return mapa
+  }, [custos, eventosRealizados])
+
+  const custosManutencaoPorViagemId = useMemo(() => {
+    const mapa = new Map<string, number>()
+
+    eventosRealizados
+      .filter((evento) => evento.tipo_evento === "manutencao")
+      .forEach((evento) => {
+        const viagemId = evento.viagem_id
+        if (!viagemId) return
+        const payload = (evento.payload || {}) as Record<string, unknown>
+        const valorTotal = Number(payload.valor_total || 0)
+        mapa.set(viagemId, (mapa.get(viagemId) || 0) + Math.max(0, valorTotal))
+      })
+
+    return mapa
+  }, [eventosRealizados])
+
   const custosPorCategoria = useMemo(() => {
     const total = custos.reduce((sum, item) => sum + Number(item.valor || 0), 0)
     const grouped = custos.reduce((acc, item) => {
@@ -1893,6 +1936,42 @@ export function ViagemDetalheClient({
 
     return consumos.reduce((sum, next) => sum + next, 0) / consumos.length
   }, [eventosRealizados])
+
+  // ─── KPIs derivados (health score + operacionais + financeiros) ────────────
+  const autonomiaRestanteKm = useMemo(() => {
+    const saldo = saldoAtualEstimadoLitros !== null ? saldoAtualEstimadoLitros : 0
+    if (saldo <= 0 || consumoMedioEditavel <= 0) return null
+    return Math.max(0, Math.round(saldo * consumoMedioEditavel))
+  }, [consumoMedioEditavel, saldoAtualEstimadoLitros])
+
+  const eficienciaMovimentoPercent = useMemo(() => {
+    if (!realHours || realHours <= 0) return null
+    const paradoHoras = tempoTotalParadoMin / 60
+    const emMovimentoHoras = Math.max(0, realHours - paradoHoras)
+    return Math.min(100, Math.round((emMovimentoHoras / realHours) * 100))
+  }, [realHours, tempoTotalParadoMin])
+
+  const eventosConformidadePercent = useMemo(() => {
+    const total = eventosRealizados.length + eventosPlanejados.length
+    if (total <= 0) return null
+    return Math.min(100, Math.round((eventosRealizados.length / total) * 100))
+  }, [eventosRealizados.length, eventosPlanejados.length])
+
+  const healthScore = useMemo(() => {
+    let score = 100
+    if (atrasoAcumuladoCicloMin > 0) score -= Math.min(30, Math.round(atrasoAcumuladoCicloMin / 10))
+    if (saldoAtualEstimadoLitros !== null && saldoAtualEstimadoLitros < 0) score -= 25
+    if (eventosRealizados.length === 0) score -= 20
+    if (documentos.length === 0) score -= 10
+    if (tempoTotalParadoMin >= 120) score -= Math.min(15, Math.round((tempoTotalParadoMin - 120) / 30))
+    return Math.max(0, Math.min(100, score))
+  }, [atrasoAcumuladoCicloMin, documentos.length, eventosRealizados.length, saldoAtualEstimadoLitros, tempoTotalParadoMin])
+
+  const healthScoreLabel = useMemo(() => {
+    if (healthScore >= 80) return { label: "Saudável", color: "text-emerald-700", bg: "bg-emerald-100", ring: "ring-emerald-300" }
+    if (healthScore >= 55) return { label: "Atenção", color: "text-amber-700", bg: "bg-amber-100", ring: "ring-amber-300" }
+    return { label: "Crítico", color: "text-red-700", bg: "bg-red-100", ring: "ring-red-300" }
+  }, [healthScore])
 
   const pendenciasCockpit = useMemo(() => {
     const itens: string[] = []
@@ -3717,87 +3796,8 @@ export function ViagemDetalheClient({
 
         <TabsContent value="operacao" className="space-y-3 min-h-0">
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
-            <div className="space-y-3 xl:col-span-9">
-              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(220px,1fr)] gap-3">
-                <div className="space-y-3">
-                  <Card className="sticky top-2 z-10 border-border/60 bg-background/95 shadow-sm backdrop-blur py-3 gap-2">
-                    <CardContent className="p-4 sm:p-4 space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <h2 className="text-xl font-bold tracking-tight">CICLO TRANSLOG</h2>
-                        {subViagemAtivaId && (
-                          <Badge className="bg-blue-100 text-blue-800 border-blue-200">
-                            Visualizando sub-viagem
-                          </Badge>
-                        )}
-                        {subViagensCarregadas.length > 0 && !subViagemAtivaId && (
-                          <Badge className="bg-amber-100 text-amber-800 border-amber-200">
-                            {subViagensCarregadas.length} sub-viagem(s)
-                          </Badge>
-                        )}
-                      </div>
-                      {subViagemAtivaId && (
-                        <p className="text-xs text-muted-foreground">
-                          <Button
-                            variant="link"
-                            size="sm"
-                            className="h-auto p-0 text-xs"
-                            onClick={() => setSubViagemAtivaId(null)}
-                          >
-                            ← Voltar para viagem principal
-                          </Button>
-                        </p>
-                      )}
-                      <p className="text-sm text-muted-foreground leading-tight">
-                        Ciclo: <span className="font-medium text-foreground">{cicloLabel}</span>
-                        {" | "}ID do ciclo: <span className="font-medium text-foreground">{cicloIdReferencia}</span>
-                        {" | "}Veículo: <span className="font-medium text-foreground">{veiculoAtual?.placa_cavalo || "A DEFINIR"}</span>
-                        {" | "}Motorista: <span className="font-medium text-foreground">{motoristaAtual?.nome || "A DEFINIR"}</span>
-                        {" | "}Status da viagem: <span className="font-semibold text-foreground">{faseOperacional}</span>
-                        {cicloFechado ? <Badge className="ml-2 bg-red-100 text-red-800 border-red-200">Fechamento de ciclo</Badge> : null}
-                      </p>
-                      <p className="text-sm text-muted-foreground leading-tight">
-                        Marco atual: <span className="font-medium text-foreground">{ultimoMarco ? `${eventTypeLabels[ultimoMarco.tipo_evento]} (${ultimoMarco.local || "A DEFINIR"})` : "A DEFINIR"}</span>
-                      </p>
-                      <p className="text-sm text-muted-foreground leading-tight">
-                        Próximo marco (previsão): <span className="font-medium text-foreground">{proximaAcaoTitulo} — {formatDateTime(proximaAcaoPrevisao)}</span>
-                        {" | "}Retorno: <span className="font-medium text-foreground">{viagemContexto.destino_real ? "Definido" : "Em aberto"}</span>
-                      </p>
-                      <p className="text-sm text-muted-foreground leading-tight">
-                        Previsão destino: <span className="font-medium text-foreground">{formatDateTime(previsaoChegadaDestino)}</span>
-                        {atrasoAcumuladoCicloMin > 0 ? (
-                          <>
-                            {" | "}Atraso acumulado: <span className="font-medium text-foreground">+{formatDurationByUnit(atrasoAcumuladoCicloMin)}</span>
-                          </>
-                        ) : null}
-                      </p>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="border-border/60 shadow-sm py-3 gap-2">
-                    <CardHeader className="pb-1 px-4">
-                      <CardTitle className="text-lg">ALERTAS / PENDÊNCIAS</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-0.5 pt-0 px-4">
-                      {pendenciasCockpit.map((item) => (
-                        <p key={item} className="text-sm text-muted-foreground">
-                          <TriangleAlert className="size-4 inline-block mr-2 align-text-bottom" />
-                          {item}
-                        </p>
-                      ))}
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <div className="space-y-2 lg:self-start">
-                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Carregamento real vs planejado</p><p className="text-base font-semibold">{formatDurationByUnit(tempoCarregamentoRealMin)} / {formatDurationByUnit(tempoCarregamentoPlanejadoMin)}</p></CardContent></Card>
-                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Tempo parado (total)</p><p className="text-base font-semibold">{formatDurationByUnit(tempoTotalParadoMin)}</p></CardContent></Card>
-                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Atraso acumulado do ciclo</p><p className="text-base font-semibold">+{formatDurationByUnit(atrasoAcumuladoCicloMin)}</p></CardContent></Card>
-                  <Card className="border-border/60 shadow-sm py-2 gap-1"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Diesel no ciclo (L)</p><p className="text-base font-semibold">{abastecimentosResumo.litros.toFixed(0)} L</p></CardContent></Card>
-                </div>
-              </div>
-
-
-              <Card className="border-border/60 shadow-sm py-3 gap-2">
+            <div className="xl:col-span-10 flex flex-col gap-2">
+              <Card className="order-2 border-border/60 shadow-sm py-3 gap-2">
                 <CardHeader className="pb-1 px-4 gap-3">
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                     <div className="flex flex-wrap items-center gap-2">
@@ -3921,6 +3921,11 @@ export function ViagemDetalheClient({
                                       <Badge variant="outline" className="text-[10px]">
                                         {grupo.viagem?.motorista?.nome || "Sem motorista"}
                                       </Badge>
+                                      <Badge variant="outline" className="text-[10px]">
+                                        Frete: {typeof grupo.viagem?.valor_frete === "number" && Number.isFinite(grupo.viagem.valor_frete)
+                                          ? formatCurrency(grupo.viagem.valor_frete)
+                                          : "A definir"}
+                                      </Badge>
                                     </div>
                                     <Button
                                       variant="ghost"
@@ -3948,6 +3953,15 @@ export function ViagemDetalheClient({
                                     <span className="text-xs text-muted-foreground">
                                       {grupo.eventosReais} realizado(s) • {grupo.eventosPlanejados} planejado(s)
                                     </span>
+                                    <Badge variant="outline" className="text-[10px]">
+                                      Abast: {formatCurrency(custosAbastecimentoPorViagemId.get(grupo.viagemId) || 0)}
+                                    </Badge>
+                                    <Badge variant="outline" className="text-[10px]">
+                                      Manut: {formatCurrency(custosManutencaoPorViagemId.get(grupo.viagemId) || 0)}
+                                    </Badge>
+                                    <Badge variant="outline" className="text-[10px] font-medium">
+                                      Custo: {formatCurrency((custosAbastecimentoPorViagemId.get(grupo.viagemId) || 0) + (custosManutencaoPorViagemId.get(grupo.viagemId) || 0))}
+                                    </Badge>
                                     <span className="text-xs text-muted-foreground">{grupo.fechamentoMotivo}</span>
                                     {grupo.contagem === 0 ? <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-700">Sem eventos</Badge> : null}
                                     {grupo.temFechamento && !grupo.viagem?.fechamento_evento_id ? <Badge variant="outline" className="text-[10px] border-red-500 text-red-700">Sem fechamento_evento</Badge> : null}
@@ -4010,12 +4024,366 @@ export function ViagemDetalheClient({
                   </div>
                 </CardContent>
               </Card>
+
+              <div className="order-1 grid grid-cols-1 gap-2">
+                <div className="space-y-3">
+                  <Card className="sticky top-2 z-10 border-border/60 bg-background/95 shadow-sm backdrop-blur py-1 gap-1">
+                    <CardContent className="p-2.5 sm:p-2.5 space-y-1.5">
+                      {/* Cabeçalho com título + badges de estado */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-lg font-bold tracking-tight">CICLO TRANSLOG</h2>
+                        <Badge className={`${healthScoreLabel.bg} ${healthScoreLabel.color} border-transparent font-semibold`}>
+                          {healthScoreLabel.label} · {healthScore}/100
+                        </Badge>
+                        {subViagemAtivaId && (
+                          <Badge className="bg-blue-100 text-blue-800 border-blue-200">
+                            Sub-viagem ativa
+                          </Badge>
+                        )}
+                        {subViagensCarregadas.length > 0 && !subViagemAtivaId && (
+                          <Badge className="bg-amber-100 text-amber-800 border-amber-200">
+                            {subViagensCarregadas.length} sub-viagem(s)
+                          </Badge>
+                        )}
+                        {cicloFechado && <Badge className="bg-red-100 text-red-800 border-red-200">Ciclo fechado</Badge>}
+                        {atrasoAcumuladoCicloMin > 0 && (
+                          <Badge className="bg-red-100 text-red-800 border-red-200">
+                            +{formatDurationByUnit(atrasoAcumuladoCicloMin)} atraso
+                          </Badge>
+                        )}
+                      </div>
+
+                      {/* Progresso da rota */}
+                      {kmPlanejado > 0 && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1 text-xs text-muted-foreground">
+                            <span>{origemOperacionalLabel}</span>
+                            <span className="font-semibold text-foreground">{progressoRotaPercent.toFixed(0)}%</span>
+                            <span>{destinoOperacionalLabel}</span>
+                          </div>
+                          <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-blue-500" : "bg-slate-400"
+                              }`}
+                              style={{ width: `${progressoRotaPercent}%` }}
+                            />
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            {kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km` : "0 km"} percorridos
+                            {kmRestanteAutomatico > 0 ? ` · ${kmRestanteAutomatico.toLocaleString("pt-BR")} km restantes` : ""}
+                          </p>
+                        </div>
+                      )}
+
+                      {subViagemAtivaId && (
+                        <p className="text-xs text-muted-foreground">
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="h-auto p-0 text-xs"
+                            onClick={() => setSubViagemAtivaId(null)}
+                          >
+                            ← Voltar para viagem principal
+                          </Button>
+                        </p>
+                      )}
+
+                      {/* Dados operacionais em grade compacta */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-0 text-xs sm:text-sm">
+                        <p className="text-muted-foreground">Ciclo: <span className="font-medium text-foreground">{cicloLabel}</span></p>
+                        <p className="text-muted-foreground">Veículo: <span className="font-medium text-foreground">{veiculoAtual?.placa_cavalo || "A DEFINIR"}</span></p>
+                        <p className="text-muted-foreground">Motorista: <span className="font-medium text-foreground">{motoristaAtual?.nome || "A DEFINIR"}</span></p>
+                        <p className="text-muted-foreground col-span-2 sm:col-span-1">ID ciclo: <span className="font-medium text-foreground text-xs">{cicloIdReferencia}</span></p>
+                        <p className="text-muted-foreground">Fase: <span className="font-semibold text-foreground">{faseOperacional}</span></p>
+                        <p className="text-muted-foreground">Docs: <span className="font-medium text-foreground">{documentos.length}</span></p>
+                      </div>
+
+                      {/* Marco atual + próximo */}
+                      <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 space-y-0">
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground">Marco atual:</span>{" "}
+                          {ultimoMarco ? `${eventTypeLabels[ultimoMarco.tipo_evento]} · ${ultimoMarco.local || "A DEFINIR"} · ${formatDateTime(ultimoMarco.ocorrido_em)}` : "Nenhum evento registrado"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground">Próximo:</span>{" "}
+                          {proximaAcaoTitulo} — {formatDateTime(proximaAcaoPrevisao)}
+                          {" · "}Retorno: {viagemContexto.destino_real ? "Definido" : "Em aberto"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground">Previsão destino:</span>{" "}
+                          {formatDateTime(previsaoChegadaDestino)}
+                        </p>
+                      </div>
+
+                      {/* Próxima melhor ação */}
+                      {acoesRecomendadas.length > 0 && (
+                        <div className="rounded-md border border-primary/20 bg-primary/5 px-2 py-1">
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-primary/70 mb-1">Próxima ação recomendada</p>
+                          <p className="text-xs sm:text-sm text-foreground leading-snug">{acoesRecomendadas[0]}</p>
+                          {acoesRecomendadas.length > 1 && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{acoesRecomendadas[1]}</p>
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* ALERTAS com severidade */}
+                  <Card className="border-border/60 shadow-sm py-2 gap-1">
+                    <CardHeader className="pb-1 px-3">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-lg">ALERTAS / PENDÊNCIAS</CardTitle>
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ${healthScoreLabel.bg} ${healthScoreLabel.color} ${healthScoreLabel.ring}`}>
+                          Health {healthScore}/100
+                        </span>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-1 pt-0 px-3">
+                      {pendenciasCockpit.map((item) => {
+                        const isCritical = item.toLowerCase().includes("insuficiente") || item.toLowerCase().includes("atraso estimado")
+                        const isWarning = item.toLowerCase().includes("elevado") || item.toLowerCase().includes("pendente")
+                        return (
+                          <div key={item} className={`flex items-start gap-2 rounded-md px-2 py-1 text-sm ${
+                            isCritical ? "bg-red-50 text-red-800" : isWarning ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-700"
+                          }`}>
+                            <TriangleAlert className={`size-4 mt-0.5 shrink-0 ${isCritical ? "text-red-500" : isWarning ? "text-amber-500" : "text-slate-400"}`} />
+                            <span className="leading-snug">{item}</span>
+                          </div>
+                        )
+                      })}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* KPIs movidos para a coluna da direita */}
+                <div className="hidden">
+                  {/* Linha 1 · Críticos */}
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-0.5">Críticos</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Health Score */}
+                    <Card className={`border shadow-sm py-2 gap-0 ring-1 ${healthScoreLabel.ring}`}>
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Health score</p>
+                        <p className={`text-2xl font-bold ${healthScoreLabel.color}`}>{healthScore}</p>
+                        <p className={`text-[11px] font-semibold ${healthScoreLabel.color}`}>{healthScoreLabel.label}</p>
+                      </CardContent>
+                    </Card>
+                    {/* Atraso */}
+                    <Card className={`border shadow-sm py-2 gap-0 ${atrasoAcumuladoCicloMin > 0 ? "ring-1 ring-red-300 border-red-200" : "border-border/60"}`}>
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Atraso acumulado</p>
+                        <p className={`text-2xl font-bold ${atrasoAcumuladoCicloMin > 0 ? "text-red-700" : "text-emerald-700"}`}>
+                          {atrasoAcumuladoCicloMin > 0 ? `+${formatDurationByUnit(atrasoAcumuladoCicloMin)}` : "No prazo"}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {atrasoAcumuladoCicloMin > 0 ? "Acima do planejado" : "Dentro do SLA"}
+                        </p>
+                      </CardContent>
+                    </Card>
+                    {/* Autonomia */}
+                    <Card className={`border shadow-sm py-2 gap-0 col-span-2 ${autonomiaRestanteKm !== null && autonomiaRestanteKm < 200 ? "ring-1 ring-amber-300 border-amber-200" : "border-border/60"}`}>
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Autonomia restante estimada</p>
+                        <p className={`text-2xl font-bold ${autonomiaRestanteKm === null ? "text-muted-foreground" : autonomiaRestanteKm < 200 ? "text-amber-700" : "text-foreground"}`}>
+                          {autonomiaRestanteKm !== null ? `${autonomiaRestanteKm.toLocaleString("pt-BR")} km` : "-"}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {saldoAtualEstimadoLitros !== null ? `Saldo: ${saldoAtualEstimadoLitros.toFixed(0)} L` : "Configure saldo inicial"}
+                          {kmRestanteAutomatico > 0 ? ` · ${kmRestanteAutomatico.toLocaleString("pt-BR")} km restantes na rota` : ""}
+                        </p>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Linha 2 · Performance */}
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-0.5 pt-1">Performance</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Progresso da rota */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0 col-span-2">
+                      <CardContent className="p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Progresso da rota</p>
+                          <span className="text-[11px] font-semibold text-foreground">{progressoRotaPercent.toFixed(0)}%</span>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-blue-500" : "bg-slate-400"
+                            }`}
+                            style={{ width: `${progressoRotaPercent}%` }}
+                          />
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          {kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km percorridos` : "Sem dados de km"}
+                          {kmPlanejado > 0 ? ` / ${kmPlanejado.toLocaleString("pt-BR")} km planejados` : ""}
+                        </p>
+                      </CardContent>
+                    </Card>
+                    {/* Eficiência de movimento */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0">
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Em movimento</p>
+                        <p className="text-2xl font-bold text-foreground">
+                          {eficienciaMovimentoPercent !== null ? `${eficienciaMovimentoPercent}%` : "-"}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Parado: {formatDurationByUnit(tempoTotalParadoMin)}</p>
+                      </CardContent>
+                    </Card>
+                    {/* Eventos cumpridos */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0">
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Eventos</p>
+                        <p className="text-2xl font-bold text-foreground">
+                          {eventosRealizados.length} <span className="text-base font-normal text-muted-foreground">/ {eventosRealizados.length + eventosPlanejados.length}</span>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {eventosConformidadePercent !== null ? `${eventosConformidadePercent}% realizados` : "Sem eventos"}
+                        </p>
+                      </CardContent>
+                    </Card>
+                    {/* Km/l */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0">
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Km/L real</p>
+                        <p className="text-2xl font-bold text-foreground">
+                          {kmPorLitroCiclo !== null ? kmPorLitroCiclo.toFixed(2) : "-"}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Meta: {consumoMedioEditavel > 0 ? consumoMedioEditavel.toFixed(2) : "-"}
+                        </p>
+                      </CardContent>
+                    </Card>
+                    {/* Carregamento */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0">
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Carregamento</p>
+                        <p className="text-base font-bold text-foreground leading-tight">
+                          {formatDurationByUnit(tempoCarregamentoRealMin)}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Plan.: {formatDurationByUnit(tempoCarregamentoPlanejadoMin)}</p>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Linha 3 · Financeiro */}
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-0.5 pt-1">Financeiro</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Receita */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0">
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Receita</p>
+                        <p className="text-lg font-bold text-emerald-700">{formatCurrency(receitaTotal)}</p>
+                        <p className="text-[11px] text-muted-foreground">Frete: {formatCurrency(receitaFrete)}</p>
+                      </CardContent>
+                    </Card>
+                    {/* Custo */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0">
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Custo acum.</p>
+                        <p className="text-lg font-bold text-red-700">{formatCurrency(custosTotal)}</p>
+                        <p className="text-[11px] text-muted-foreground">Diesel: {formatCurrency(abastecimentosResumo.custo)}</p>
+                      </CardContent>
+                    </Card>
+                    {/* Margem */}
+                    <Card className={`border shadow-sm py-2 gap-0 ${lucro < 0 ? "ring-1 ring-red-300 border-red-200" : "border-border/60"}`}>
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Margem est.</p>
+                        <p className={`text-lg font-bold ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                          {lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">{formatCurrency(lucro)}</p>
+                      </CardContent>
+                    </Card>
+                    {/* Custo/km */}
+                    <Card className="border-border/60 shadow-sm py-2 gap-0">
+                      <CardContent className="p-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">R$/km</p>
+                        <p className="text-lg font-bold text-foreground">
+                          {custoPorKm > 0 ? formatCurrency(custoPorKm) : "-"}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">{kmTotalCiclo > 0 ? `${kmTotalCiclo.toLocaleString("pt-BR")} km` : "Sem km"}</p>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              </div>
+
+
             </div>
 
-            <div className="space-y-3 xl:col-span-3">
+            <div className="space-y-2 xl:col-span-2 xl:max-w-[320px] xl:sticky xl:top-2 xl:self-start">
+              {/* Indicadores compactos no canto direito */}
+              <Card className="border-border/60 shadow-sm py-2 gap-1">
+                <CardContent className="p-2 sm:p-2.5 space-y-2">
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Críticos</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className={`rounded-lg border p-2 ${healthScoreLabel.ring}`}>
+                      <p className="text-[10px] text-muted-foreground">Health</p>
+                      <p className={`text-lg sm:text-xl font-bold leading-none ${healthScoreLabel.color}`}>{healthScore}</p>
+                      <p className={`text-[11px] ${healthScoreLabel.color}`}>{healthScoreLabel.label}</p>
+                    </div>
+                    <div className={`rounded-lg border p-2 ${atrasoAcumuladoCicloMin > 0 ? "border-red-300" : "border-border/60"}`}>
+                      <p className="text-[10px] text-muted-foreground">Atraso</p>
+                      <p className={`text-base sm:text-lg font-bold leading-none ${atrasoAcumuladoCicloMin > 0 ? "text-red-700" : "text-emerald-700"}`}>
+                        {atrasoAcumuladoCicloMin > 0 ? `+${formatDurationByUnit(atrasoAcumuladoCicloMin)}` : "No prazo"}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">SLA</p>
+                    </div>
+                    <div className="sm:col-span-2 rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Autonomia estimada</p>
+                      <p className="text-base sm:text-lg font-bold text-foreground leading-tight break-words">
+                        {autonomiaRestanteKm !== null ? `${autonomiaRestanteKm.toLocaleString("pt-BR")} km` : "-"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Performance</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="sm:col-span-2 rounded-lg border border-border/60 p-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[10px] text-muted-foreground">Progresso da rota</p>
+                        <span className="text-[11px] font-semibold">{progressoRotaPercent.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${progressoRotaPercent}%` }} />
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Movimento</p>
+                      <p className="text-lg sm:text-xl font-bold leading-none">{eficienciaMovimentoPercent !== null ? `${eficienciaMovimentoPercent}%` : "-"}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Eventos</p>
+                      <p className="text-lg sm:text-xl font-bold leading-none">{eventosRealizados.length} / {eventosRealizados.length + eventosPlanejados.length}</p>
+                    </div>
+                  </div>
+
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Financeiro</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Receita</p>
+                      <p className="text-sm sm:text-base font-bold text-emerald-700 leading-tight break-all">{formatCurrency(receitaTotal)}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Custo</p>
+                      <p className="text-sm sm:text-base font-bold text-red-700 leading-tight break-all">{formatCurrency(custosTotal)}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Margem</p>
+                      <p className={`text-sm sm:text-base font-bold leading-tight ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">R$/km</p>
+                      <p className="text-sm sm:text-base font-bold leading-tight break-words">{custoPorKm > 0 ? formatCurrency(custoPorKm) : "-"}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
               <Card className="border-border/60 shadow-sm">
-                <CardHeader className="pb-2"><CardTitle className="text-xl">Ações rápidas</CardTitle></CardHeader>
-                <CardContent className="space-y-2 pt-0">
+                <CardHeader className="pb-1"><CardTitle className="text-lg">Ações rápidas</CardTitle></CardHeader>
+                <CardContent className="space-y-2 pt-0 pb-3">
                   <div className="grid gap-1">
                     <Label>Viagem dos registros</Label>
                     <Select
@@ -4122,7 +4490,19 @@ export function ViagemDetalheClient({
                             {selectedQuickAction && selectedQuickAction.type === 'abastecimento' && (
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 <div className="md:col-span-2 border-b pb-2 mb-2">
-                                  <h3 className="text-xs font-bold text-primary">📋 IDENTIFICAÇÃO BÁSICA</h3>
+                                  <h3 className="text-xs font-bold text-primary">1. CONTEXTO NO CLIENTE</h3>
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Data/Hora chegada cliente</Label>
+                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.chegada_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
+                                </div>
+                                <div>
+                                  <Label className="text-xs font-semibold">Data/Hora partida cliente</Label>
+                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.partida_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
+                                </div>
+
+                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
+                                  <h3 className="text-xs font-bold text-primary">2. DADOS DO EVENTO</h3>
                                 </div>
                                 <div>
                                   <Label className="text-xs font-semibold">Data/Hora Início *</Label>
@@ -4133,14 +4513,6 @@ export function ViagemDetalheClient({
                                   <Input type="datetime-local" className="text-sm" value={abastecimentoForm.fim_em} onChange={e => setAbastecimentoForm(f => ({ ...f, fim_em: e.target.value }))} />
                                 </div>
                                 <div>
-                                  <Label className="text-xs font-semibold">Data/Hora chegada cliente</Label>
-                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.chegada_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Data/Hora partida cliente</Label>
-                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.partida_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
-                                </div>
-                                <div>
                                   <Label className="text-xs font-semibold">Local (cidade/posto) *</Label>
                                   <Input className="text-sm" value={abastecimentoForm.local} onChange={e => setAbastecimentoForm(f => ({ ...f, local: e.target.value }))} placeholder="Ex: Aurora/PA" required />
                                 </div>
@@ -4148,19 +4520,9 @@ export function ViagemDetalheClient({
                                   <Label className="text-xs font-semibold">Motorista</Label>
                                   <Input className="text-sm" value={abastecimentoForm.motorista} onChange={e => setAbastecimentoForm(f => ({ ...f, motorista: e.target.value }))} placeholder="Nome do motorista" />
                                 </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Metodo de pagamento</Label>
-                                  <Select value={abastecimentoForm.forma_pagamento} onValueChange={v => setAbastecimentoForm(f => ({ ...f, forma_pagamento: v }))}>
-                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                      {metodosPagamentoBrasil.map((metodo) => (
-                                        <SelectItem key={`abastecimento-${metodo}`} value={metodo}>{metodo}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
+
                                 <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">⚙️ ABASTECIMENTO E CUSTO</h3>
+                                  <h3 className="text-xs font-bold text-primary">3. MEDIÇÃO OPERACIONAL</h3>
                                 </div>
                                 <div>
                                   <Label className="text-xs font-semibold">Hodômetro (km) *</Label>
@@ -4179,6 +4541,10 @@ export function ViagemDetalheClient({
                                       <SelectItem value="sim">✅ Sim</SelectItem>
                                     </SelectContent>
                                   </Select>
+                                </div>
+
+                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
+                                  <h3 className="text-xs font-bold text-primary">4. COMBUSTÍVEIS E PREÇOS</h3>
                                 </div>
                                 <div>
                                   <Label className="text-xs font-semibold">Litros abastecidos – Cavalo *</Label>
@@ -4224,6 +4590,25 @@ export function ViagemDetalheClient({
                                     </div>
                                   </>
                                 )}
+
+                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
+                                  <h3 className="text-xs font-bold text-primary">5. PAGAMENTO</h3>
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label className="text-xs font-semibold">Método de pagamento</Label>
+                                  <Select value={abastecimentoForm.forma_pagamento} onValueChange={v => setAbastecimentoForm(f => ({ ...f, forma_pagamento: v }))}>
+                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      {metodosPagamentoBrasil.map((metodo) => (
+                                        <SelectItem key={`abastecimento-${metodo}`} value={metodo}>{metodo}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+
+                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
+                                  <h3 className="text-xs font-bold text-primary">6. RESUMO FINANCEIRO</h3>
+                                </div>
                                 <div className="md:col-span-2 rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-emerald-100/60 p-4 shadow-sm">
                                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                                     <div>
@@ -4256,7 +4641,7 @@ export function ViagemDetalheClient({
                                 </div>
                               </div>
                             )}
-                            {selectedQuickAction && selectedQuickAction.type === 'ocorrencia' && (
+                            {selectedQuickAction && selectedQuickAction.type === 'ocorrencia' && selectedQuickAction.title !== 'Documentação' && (
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 <div>
                                   <Label className="text-xs font-semibold">Data/Hora</Label>
@@ -4514,111 +4899,203 @@ export function ViagemDetalheClient({
                               </div>
                             )}
                             {selectedQuickAction && selectedQuickAction.type === 'manutencao' && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Data/Hora *</Label>
-                                  <Input type="datetime-local" className="text-sm" value={manutencaoForm.inicio_em} onChange={e => setManutencaoForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                              <div className="space-y-4">
+                                <div className="rounded-xl border border-primary/20 bg-gradient-to-r from-primary/[0.08] to-background px-3 py-2">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-xs font-semibold text-foreground">Lançamento de manutenção</p>
+                                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                                      <Badge variant="secondary" className="rounded-full">Obrigatórios: Data/Hora, Local, Tipo</Badge>
+                                      <Badge variant="outline" className="rounded-full font-semibold">
+                                        {formatCurrency(parseDecimalInput(manutencaoForm.valor_total || "0"))}
+                                      </Badge>
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Local *</Label>
-                                  <Input className="text-sm" value={manutencaoForm.local} onChange={e => setManutencaoForm(f => ({ ...f, local: e.target.value }))} placeholder="Ex: Xinguara" required />
+
+                                <div className="rounded-xl border bg-card p-3">
+                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">1. CONTEXTO OPERACIONAL</h3>
+                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div>
+                                      <Label className="text-xs font-semibold">Data/Hora *</Label>
+                                      <Input
+                                        type="datetime-local"
+                                        className="mt-1 text-sm"
+                                        value={manutencaoForm.inicio_em}
+                                        onChange={e => setManutencaoForm(f => ({ ...f, inicio_em: e.target.value }))}
+                                        required
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Tipo de Manutenção *</Label>
+                                      <Select value={manutencaoForm.tipo_manutencao} onValueChange={v => setManutencaoForm(f => ({ ...f, tipo_manutencao: v as any }))}>
+                                        <SelectTrigger className="mt-1 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="preventiva">Preventiva</SelectItem>
+                                          <SelectItem value="corretiva">Corretiva</SelectItem>
+                                          <SelectItem value="pneus">Pneus</SelectItem>
+                                          <SelectItem value="eletrica">Elétrica</SelectItem>
+                                          <SelectItem value="motor">Motor</SelectItem>
+                                          <SelectItem value="freios">Freios</SelectItem>
+                                          <SelectItem value="suspensao">Suspensão</SelectItem>
+                                          <SelectItem value="thermo_king">Thermo King</SelectItem>
+                                          <SelectItem value="outro">Outro</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <Label className="text-xs font-semibold">Local *</Label>
+                                      <Input
+                                        className="mt-1 text-sm"
+                                        value={manutencaoForm.local}
+                                        onChange={e => setManutencaoForm(f => ({ ...f, local: e.target.value }))}
+                                        placeholder="Ex: Oficina Central - Xinguara"
+                                        required
+                                      />
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Tipo de Manutenção *</Label>
-                                  <Select value={manutencaoForm.tipo_manutencao} onValueChange={v => setManutencaoForm(f => ({ ...f, tipo_manutencao: v as any }))}>
-                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="preventiva">Preventiva</SelectItem>
-                                      <SelectItem value="corretiva">Corretiva</SelectItem>
-                                      <SelectItem value="pneus">Pneus</SelectItem>
-                                      <SelectItem value="eletrica">Elétrica</SelectItem>
-                                      <SelectItem value="motor">Motor</SelectItem>
-                                      <SelectItem value="freios">Freios</SelectItem>
-                                      <SelectItem value="suspensao">Suspensão</SelectItem>
-                                      <SelectItem value="thermo_king">Thermo King</SelectItem>
-                                      <SelectItem value="outro">Outro</SelectItem>
-                                    </SelectContent>
-                                  </Select>
+
+                                <div className="rounded-xl border bg-card p-3">
+                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">2. CUSTO E CONTROLE</h3>
+                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div>
+                                      <Label className="text-xs font-semibold">Hodômetro</Label>
+                                      <Input
+                                        type="number"
+                                        inputMode="numeric"
+                                        className="mt-1 text-sm"
+                                        value={manutencaoForm.hodometro}
+                                        onChange={e => setManutencaoForm(f => ({ ...f, hodometro: e.target.value }))}
+                                        placeholder="Ex: 150000"
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Valor Total</Label>
+                                      <Input
+                                        type="number"
+                                        inputMode="decimal"
+                                        step="0.01"
+                                        className="mt-1 text-sm"
+                                        value={manutencaoForm.valor_total}
+                                        onChange={e => setManutencaoForm(f => ({ ...f, valor_total: e.target.value }))}
+                                        placeholder="Ex: 500.00"
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Nota Fiscal</Label>
+                                      <Input
+                                        className="mt-1 text-sm"
+                                        value={manutencaoForm.nota_fiscal}
+                                        onChange={e => setManutencaoForm(f => ({ ...f, nota_fiscal: e.target.value }))}
+                                        placeholder="Ex: 123456"
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Método de pagamento</Label>
+                                      <Select value={manutencaoForm.forma_pagamento} onValueChange={v => setManutencaoForm(f => ({ ...f, forma_pagamento: v }))}>
+                                        <SelectTrigger className="mt-1 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                                        <SelectContent>
+                                          {metodosPagamentoBrasil.map((metodo) => (
+                                            <SelectItem key={`manutencao-${metodo}`} value={metodo}>{metodo}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  </div>
                                 </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Hodômetro</Label>
-                                  <Input className="text-sm" value={manutencaoForm.hodometro} onChange={e => setManutencaoForm(f => ({ ...f, hodometro: e.target.value }))} placeholder="Ex: 150000" />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Valor Total</Label>
-                                  <Input className="text-sm" value={manutencaoForm.valor_total} onChange={e => setManutencaoForm(f => ({ ...f, valor_total: e.target.value }))} placeholder="Ex: 500.00" />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Nota Fiscal</Label>
-                                  <Input className="text-sm" value={manutencaoForm.nota_fiscal} onChange={e => setManutencaoForm(f => ({ ...f, nota_fiscal: e.target.value }))} placeholder="Ex: 123456" />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Metodo de pagamento</Label>
-                                  <Select value={manutencaoForm.forma_pagamento} onValueChange={v => setManutencaoForm(f => ({ ...f, forma_pagamento: v }))}>
-                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                      {metodosPagamentoBrasil.map((metodo) => (
-                                        <SelectItem key={`manutencao-${metodo}`} value={metodo}>{metodo}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Observação</Label>
-                                  <Textarea className="text-sm" rows={3} value={manutencaoForm.observacao} onChange={e => setManutencaoForm(f => ({ ...f, observacao: e.target.value }))} />
+
+                                <div className="rounded-xl border bg-card p-3">
+                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">3. DESCRIÇÃO DO SERVIÇO</h3>
+                                  <div>
+                                    <Label className="text-xs font-semibold">Observação</Label>
+                                    <Textarea
+                                      className="mt-1 text-sm"
+                                      rows={4}
+                                      value={manutencaoForm.observacao}
+                                      onChange={e => setManutencaoForm(f => ({ ...f, observacao: e.target.value }))}
+                                      placeholder="Descreva o serviço realizado, peças trocadas e qualquer recomendação para o próximo ciclo."
+                                    />
+                                  </div>
                                 </div>
                               </div>
                             )}
                             {selectedQuickAction && selectedQuickAction.title === 'Documentação' && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Data/Hora *</Label>
-                                  <Input type="datetime-local" className="text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
-                                </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Local *</Label>
-                                  <Input className="text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} required />
-                                </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Observação</Label>
-                                  <Textarea className="text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} />
-                                </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Anexar arquivo</Label>
-                                  <Input 
-                                    type="file" 
-                                    className="text-sm" 
-                                    onChange={(e) => {
-                                      const file = e.target.files?.[0]
-                                      if (file) {
-                                        setDocumentacaoQuickActionFile(file)
-                                        const reader = new FileReader()
-                                        reader.onload = (event) => {
-                                          setDocumentacaoQuickActionPreview(event.target?.result as string)
-                                        }
-                                        reader.readAsDataURL(file)
-                                      }
-                                    }}
-                                  />
-                                </div>
-                                {documentacaoQuickActionPreview && (
-                                  <div className="md:col-span-2 border rounded p-3 bg-muted/50">
-                                    <Label className="text-xs font-semibold mb-2 block">Arquivo anexado:</Label>
-                                    {documentacaoQuickActionFile?.type.startsWith('image/') ? (
-                                      <img src={documentacaoQuickActionPreview} alt="preview" className="max-w-full max-h-48 rounded" />
-                                    ) : (
-                                      <div className="flex items-center gap-2 text-sm">
-                                        <div className="w-10 h-10 bg-primary/20 rounded flex items-center justify-center">
-                                          📄
-                                        </div>
-                                        <div>
-                                          <p className="font-semibold">{documentacaoQuickActionFile?.name}</p>
-                                          <p className="text-xs text-muted-foreground">{(documentacaoQuickActionFile?.size || 0) / 1024 > 1024 ? `${((documentacaoQuickActionFile?.size || 0) / 1024 / 1024).toFixed(2)} MB` : `${((documentacaoQuickActionFile?.size || 0) / 1024).toFixed(2)} KB`}</p>
-                                        </div>
-                                      </div>
-                                    )}
+                              <div className="space-y-4">
+                                <div className="rounded-xl border border-primary/20 bg-gradient-to-r from-primary/[0.08] to-background px-3 py-2">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-xs font-semibold text-foreground">Entrega de documentação</p>
+                                    <Badge variant="secondary" className="rounded-full text-[11px]">Campos obrigatórios: Data/Hora e Local</Badge>
                                   </div>
-                                )}
+                                </div>
+
+                                <div className="rounded-xl border bg-card p-3">
+                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">1. DADOS DA ENTREGA</h3>
+                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div>
+                                      <Label className="text-xs font-semibold">Data/Hora da entrega *</Label>
+                                      <Input
+                                        type="datetime-local"
+                                        className="mt-1 text-sm"
+                                        value={eventForm.inicio_em}
+                                        onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))}
+                                        required
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold">Local *</Label>
+                                      <Input
+                                        className="mt-1 text-sm"
+                                        value={eventForm.local}
+                                        onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))}
+                                        placeholder="Ex: Cliente X - Recebimento"
+                                        required
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="rounded-xl border bg-card p-3">
+                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">2. COMPROVANTE VISUAL</h3>
+                                  <div>
+                                    <Label className="text-xs font-semibold">Carregamento da imagem</Label>
+                                    <Input
+                                      type="file"
+                                      accept="image/*"
+                                      className="mt-1 text-sm"
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0]
+                                        if (file) {
+                                          setDocumentacaoQuickActionFile(file)
+                                          const reader = new FileReader()
+                                          reader.onload = (event) => {
+                                            setDocumentacaoQuickActionPreview(event.target?.result as string)
+                                          }
+                                          reader.readAsDataURL(file)
+                                        }
+                                      }}
+                                    />
+                                  </div>
+                                  {documentacaoQuickActionPreview && documentacaoQuickActionFile?.type.startsWith('image/') && (
+                                    <div className="mt-3 rounded-lg border border-border/60 bg-muted/30 p-3">
+                                      <p className="mb-2 text-xs font-semibold text-muted-foreground">Pré-visualização</p>
+                                      <img src={documentacaoQuickActionPreview} alt="pré-visualização da documentação" className="max-h-48 w-auto rounded" />
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="rounded-xl border bg-card p-3">
+                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">3. OBSERVAÇÕES</h3>
+                                  <div>
+                                    <Label className="text-xs font-semibold">Observações</Label>
+                                    <Textarea
+                                      className="mt-1 text-sm"
+                                      rows={4}
+                                      value={eventForm.observacao}
+                                      onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))}
+                                      placeholder="Descreva contexto da entrega, recebedor ou ressalvas importantes."
+                                    />
+                                  </div>
+                                </div>
                               </div>
                             )}
                           </div>
@@ -4693,63 +5170,6 @@ export function ViagemDetalheClient({
                       </div>
                     </DialogContent>
                   </Dialog>
-                  {subViagensCarregadas && subViagensCarregadas.length > 0 && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
-                      onClick={() => setFecharSubViagemModalOpen(true)}
-                      disabled={loading}
-                    >
-                      Fechar sub-viagem
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="border-border/60 shadow-sm">
-                <CardHeader className="pb-2"><CardTitle className="text-xl">DIESEL (LITROS)</CardTitle></CardHeader>
-                <CardContent className="space-y-3 pt-0 text-sm">
-                  <div className="flex items-center justify-end">
-                    <Button type="button" variant="outline" size="sm" onClick={() => openNewEventModal("abastecimento")} disabled={!temViagemAbertaParaRegistro}>
-                      Lançar abastecimento
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2">
-                    <div className="grid gap-1">
-                      <Label htmlFor="saldoInicialLitros">Saldo inicial (L)</Label>
-                      <Input
-                        id="saldoInicialLitros"
-                        type="number"
-                        value={saldoInicialLitros}
-                        onChange={(event) => setSaldoInicialLitros(event.target.value)}
-                      />
-                    </div>
-                    <div className="grid gap-1">
-                      <Label htmlFor="dieselFinalLitros">Diesel final (L)</Label>
-                      <Input
-                        id="dieselFinalLitros"
-                        type="number"
-                        value={dieselFinalLitros}
-                        onChange={(event) => setDieselFinalLitros(event.target.value)}
-                      />
-                    </div>
-                    <p>Abastecido no ciclo: <span className="font-medium">{abastecimentosResumo.litros.toFixed(0)} L</span></p>
-                    <p>Litros consumidos no ciclo: <span className="font-medium">{litrosConsumidosCiclo !== null ? `${litrosConsumidosCiclo.toFixed(0)} L` : "A DEFINIR"}</span></p>
-                    <p>KM/L do ciclo ({viagemState.motorista?.nome || "motorista"}): <span className="font-medium">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)} km/L` : "A DEFINIR"}</span></p>
-                    <p>Consumo estimado: <span className="font-medium">{consumoEstimadoLitros !== null ? `${consumoEstimadoLitros.toFixed(0)} L` : "A DEFINIR"}</span></p>
-                    <p>Saldo atual estimado: <span className="font-medium">{saldoAtualEstimadoLitros !== null ? `${saldoAtualEstimadoLitros.toFixed(0)} L` : "A DEFINIR"}</span></p>
-                    <div className="grid gap-1">
-                      <Label htmlFor="consumoMedioEditavel">Consumo médio (km/L)</Label>
-                      <Input
-                        id="consumoMedioEditavel"
-                        type="number"
-                        step="0.1"
-                        value={consumoMedioEditavel}
-                        onChange={(event) => setConsumoMedioEditavel(Number(event.target.value) || 0)}
-                      />
-                    </div>
-                  </div>
                 </CardContent>
               </Card>
             </div>
