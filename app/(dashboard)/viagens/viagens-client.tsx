@@ -142,7 +142,7 @@ type CicloResumo = {
   cicloId: string
   viagens: Viagem[]
   viagemDestaque: Viagem
-  statusCiclo: "Planejada" | "Em andamento" | "Concluida" | "Cancelada"
+  statusCiclo: "Planeado" | "Realizado"
   valorTotal: number
   kmTotal: number
 }
@@ -195,6 +195,19 @@ function buildDefaultCycleId() {
   const year = now.getFullYear()
   const stamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(4, 14)
   return `CIC-${year}-${stamp}`
+}
+
+function buildCycleIdFromTitle(title: string) {
+  const slug = title
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24)
+
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(4, 14)
+  return `CIC-${slug || "SEM-TITULO"}-${stamp}`
 }
 
 function buildPlanejamentoRota(
@@ -323,9 +336,15 @@ export function ViagensClient({
 
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNovoCicloDialogOpen, setIsNovoCicloDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [selectedViagem, setSelectedViagem] = useState<Viagem | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [isCreatingCycle, setIsCreatingCycle] = useState(false)
+  const [novoCicloTitulo, setNovoCicloTitulo] = useState("")
+  const [editCicloTitulo, setEditCicloTitulo] = useState("")
+  const [editingCicloId, setEditingCicloId] = useState("")
+  const [editingCicloViagemIds, setEditingCicloViagemIds] = useState<string[]>([])
   const [search, setSearch] = useState("")
   const [activeTab, setActiveTab] = useState("todas")
   const [cockpitOpen, setCockpitOpen] = useState(false)
@@ -389,36 +408,112 @@ export function ViagensClient({
   }
 
   const handleAdd = () => {
-    resetForm()
+    setNovoCicloTitulo("")
+    setIsNovoCicloDialogOpen(true)
+  }
+
+  const handleCreateCycle = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const titulo = novoCicloTitulo.trim()
+    if (!titulo) return
+
+    setIsCreatingCycle(true)
+
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      setIsCreatingCycle(false)
+      return
+    }
+
+    const cicloId = buildCycleIdFromTitle(titulo)
+    const nowIso = new Date().toISOString()
+
+    const insertBase = {
+      user_id: user.id,
+      ciclo_id: cicloId,
+      origem_real: null,
+      destino_real: null,
+      data_inicio: null,
+      data_fim: null,
+      tipo_carga: titulo,
+      status: "Planejada" as Viagem["status"],
+      created_at: nowIso,
+      updated_at: nowIso,
+    }
+
+    const insertCompat = {
+      ...insertBase,
+    }
+    delete (insertCompat as Record<string, unknown>).ciclo_id
+
+    let { data, error } = await supabase
+      .from("viagens")
+      .insert(insertBase)
+      .select("id")
+      .single()
+
+    if (error) {
+      const errorMsg = error.message?.toLowerCase() || ""
+      if (errorMsg.includes("ciclo_id")) {
+        const retry = await supabase
+          .from("viagens")
+          .insert(insertCompat)
+          .select("id")
+          .single()
+        data = retry.data
+        error = retry.error
+      }
+    }
+
+    if (!error && data) {
+      const novaViagem = await fetchViagemWithPostos(data.id)
+      if (novaViagem) {
+        setViagens((prev) => [novaViagem, ...prev])
+        setIsNovoCicloDialogOpen(false)
+        setNovoCicloTitulo("")
+        await handleOpenCockpitModal(novaViagem.id)
+      }
+    }
+
+    setIsCreatingCycle(false)
+  }
+
+  const handleEdit = (ciclo: CicloResumo) => {
+    setEditingCicloId(ciclo.cicloId)
+    setEditCicloTitulo(ciclo.cicloId)
+    setEditingCicloViagemIds(ciclo.viagens.map((item) => item.id))
     setIsDialogOpen(true)
   }
 
-  const handleEdit = (viagem: Viagem) => {
-    const rotaSelecionada = rotas.find((rota) => rota.id === viagem.rota_id)
-    const planejamentoFromViagem = toFormPlanejamentoRota(viagem.planejamento_rota)
+  const handleSaveCycleTitle = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const titulo = editCicloTitulo.trim()
+    if (!titulo || editingCicloViagemIds.length === 0) return
 
-    setSelectedViagem(viagem)
-    setFormData({
-      ciclo_id: viagem.ciclo_id || "",
-      cliente_id: viagem.cliente_id || "",
-      veiculo_id: viagem.veiculo_id || "",
-      motorista_id: viagem.motorista_id || "",
-      rota_id: viagem.rota_id || "",
-      rota_avulsa: viagem.rota_avulsa,
-      origem_real: viagem.origem_real || "",
-      destino_real: viagem.destino_real || "",
-      data_inicio: toDatetimeLocal(viagem.data_inicio),
-      data_fim: toDatetimeLocal(viagem.data_fim),
-      tipo_carga: viagem.tipo_carga || "",
-      volume_toneladas: viagem.volume_toneladas?.toString() || "",
-      km_real: viagem.km_real?.toString() || "",
-      valor_frete: viagem.valor_frete?.toString() || "",
-      status: viagem.status,
-      planejamento_rota: rotaSelecionada
-        ? buildPlanejamentoRota(rotaSelecionada, planejamentoFromViagem)
-        : planejamentoFromViagem,
-    })
-    setIsDialogOpen(true)
+    setIsLoading(true)
+    const novoCicloId = buildCycleIdFromTitle(titulo)
+    const nowIso = new Date().toISOString()
+
+    const { error } = await supabase
+      .from("viagens")
+      .update({ ciclo_id: novoCicloId, updated_at: nowIso })
+      .in("id", editingCicloViagemIds)
+
+    if (!error) {
+      setViagens((prev) =>
+        prev.map((item) =>
+          editingCicloViagemIds.includes(item.id)
+            ? { ...item, ciclo_id: novoCicloId, updated_at: nowIso }
+            : item,
+        ),
+      )
+      setIsDialogOpen(false)
+      setEditCicloTitulo("")
+      setEditingCicloId("")
+      setEditingCicloViagemIds([])
+    }
+
+    setIsLoading(false)
   }
 
   const handleDelete = (viagem: Viagem) => {
@@ -671,10 +766,8 @@ export function ViagensClient({
 
     const getStatusCiclo = (lista: Viagem[]): CicloResumo["statusCiclo"] => {
       const statuses = lista.map((item) => normalizeViagemStatus(item.status))
-      if (statuses.some((s) => s === "Em andamento")) return "Em andamento"
-      if (statuses.length > 0 && statuses.every((s) => s === "Concluida")) return "Concluida"
-      if (statuses.some((s) => s === "Planejada")) return "Planejada"
-      return "Cancelada"
+      const somentePlanejadas = statuses.length > 0 && statuses.every((s) => s === "Planejada")
+      return somentePlanejadas ? "Planeado" : "Realizado"
     }
 
     const sorted = Array.from(grupos.entries()).map(([cicloId, lista]) => {
@@ -718,9 +811,8 @@ export function ViagensClient({
       )
 
     if (activeTab === "todas") return matchesSearch
-    if (activeTab === "planejadas") return matchesSearch && ciclo.statusCiclo === "Planejada"
-    if (activeTab === "em_andamento") return matchesSearch && ciclo.statusCiclo === "Em andamento"
-    if (activeTab === "concluidas") return matchesSearch && ciclo.statusCiclo === "Concluida"
+    if (activeTab === "planeados") return matchesSearch && ciclo.statusCiclo === "Planeado"
+    if (activeTab === "realizados") return matchesSearch && ciclo.statusCiclo === "Realizado"
     return matchesSearch
   })
 
@@ -731,10 +823,10 @@ export function ViagensClient({
         <div>
           <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
             <Route className="h-7 w-7 text-primary" />
-            Viagens
+            Ciclos
           </h1>
           <p className="text-muted-foreground">
-            Gerencie as viagens da sua transportadora
+            Gerencie os ciclos da sua transportadora
           </p>
         </div>
         <Button onClick={handleAdd}>
@@ -748,7 +840,7 @@ export function ViagensClient({
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Buscar viagens..."
+            placeholder="Buscar ciclos..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -760,9 +852,8 @@ export function ViagensClient({
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="todas">Todas ({ciclosResumo.length})</TabsTrigger>
-          <TabsTrigger value="planejadas">Planejadas ({ciclosResumo.filter(c => c.statusCiclo === "Planejada").length})</TabsTrigger>
-          <TabsTrigger value="em_andamento">Em Andamento ({ciclosResumo.filter(c => c.statusCiclo === "Em andamento").length})</TabsTrigger>
-          <TabsTrigger value="concluidas">Concluidas ({ciclosResumo.filter(c => c.statusCiclo === "Concluida").length})</TabsTrigger>
+          <TabsTrigger value="planeados">Planeados ({ciclosResumo.filter(c => c.statusCiclo === "Planeado").length})</TabsTrigger>
+          <TabsTrigger value="realizados">Realizados ({ciclosResumo.filter(c => c.statusCiclo === "Realizado").length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-4">
@@ -792,26 +883,12 @@ export function ViagensClient({
                         </div>
                         <div className="space-y-2">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-medium text-foreground flex items-center gap-1">
-                              <MapPin className="h-4 w-4 text-muted-foreground" />
-                              {viagem.origem_real || "Origem"}
-                            </span>
-                            <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                            <span className="font-medium text-foreground">
-                              {viagem.destino_real || "Destino"}
-                            </span>
+                            <span className="font-medium text-foreground">{ciclo.cicloId}</span>
                             <Badge className={statusColors[ciclo.statusCiclo]}>
                               {ciclo.statusCiclo}
                             </Badge>
-                            <Badge variant="outline">{ciclo.cicloId}</Badge>
                             <Badge variant="outline">{ciclo.viagens.length} viagem(ns)</Badge>
                           </div>
-                          {formatPontosIntermediarios(viagem.rota?.pontos_intermediarios) && (
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                              <span className="font-medium text-foreground/80">Pontos intermediarios:</span>
-                              <span>{formatPontosIntermediarios(viagem.rota?.pontos_intermediarios)}</span>
-                            </div>
-                          )}
                           <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
                             <span className="flex items-center gap-1">
                               <Users className="h-3 w-3" />
@@ -855,17 +932,11 @@ export function ViagensClient({
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-                            <DropdownMenuItem onClick={() => handleEdit(viagem)}>
+                            <DropdownMenuItem onClick={() => handleEdit(ciclo)}>
                               <Pencil className="h-4 w-4 mr-2" />
                               Editar
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            {normalizeViagemStatus(viagem.status) === "Planejada" && (
-                              <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Em andamento")}>
-                                <Play className="h-4 w-4 mr-2" />
-                                Iniciar Viagem
-                              </DropdownMenuItem>
-                            )}
                             {normalizeViagemStatus(viagem.status) === "Em andamento" && (
                               <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Concluida")}>
                                 <CheckCircle className="h-4 w-4 mr-2" />
@@ -899,10 +970,10 @@ export function ViagensClient({
             <Card className="border-border/50">
               <CardContent className="py-12 text-center">
                 <Route className="h-12 w-12 mx-auto mb-3 text-muted-foreground/50" />
-                <p className="text-muted-foreground">Nenhuma viagem encontrada</p>
+                <p className="text-muted-foreground">Nenhum ciclo encontrado</p>
                 <Button variant="outline" className="mt-4 bg-transparent" onClick={handleAdd}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Criar primeira viagem
+                  Criar primeiro ciclo
                 </Button>
               </CardContent>
             </Card>
@@ -954,305 +1025,61 @@ export function ViagensClient({
         </DialogContent>
       </Dialog>
 
-      {/* Viagem Form Dialog */}
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="w-[95vw] max-w-4xl max-h-[92vh] overflow-y-auto">
+      {/* Novo Ciclo Dialog */}
+      <Dialog open={isNovoCicloDialogOpen} onOpenChange={setIsNovoCicloDialogOpen}>
+        <DialogContent className="w-[95vw] max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              {selectedViagem ? "Editar Viagem" : "Novo Ciclo"}
-            </DialogTitle>
+            <DialogTitle>Novo Ciclo</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-              Lançamento rápido: preencha cliente, veículo, motorista, rota e datas. Eventos operacionais são registrados no cockpit (início, fim, observação).
+          <form onSubmit={handleCreateCycle} className="space-y-4">
+            <div className="grid gap-2">
+              <Label>Titulo do ciclo</Label>
+              <Input
+                value={novoCicloTitulo}
+                onChange={(e) => setNovoCicloTitulo(e.target.value)}
+                placeholder="Ex: Saude Belém - Xinguara"
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                O sistema gera automaticamente o ID tecnico do ciclo no banco.
+              </p>
             </div>
 
-            <div className="flex items-center justify-end">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setShowAdvancedForm((prev) => !prev)}
-              >
-                {showAdvancedForm ? "Ocultar campos avançados" : "Mostrar campos avançados"}
+            <div className="flex justify-end gap-3 pt-2">
+              <Button type="button" variant="outline" onClick={() => setIsNovoCicloDialogOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={isCreatingCycle || !novoCicloTitulo.trim()}>
+                {isCreatingCycle ? "Criando..." : "Criar ciclo"}
               </Button>
             </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
-            {/* Cliente + Status */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="grid gap-2 md:col-span-2">
-                <Label>ID do Ciclo</Label>
-                <Input
-                  value={formData.ciclo_id}
-                  onChange={(e) => setFormData({ ...formData, ciclo_id: e.target.value })}
-                  placeholder="Ex: CIC-2026-0001"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Use o mesmo ID em várias viagens para agrupá-las no mesmo ciclo.
-                </p>
-              </div>
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between">
-                  <Label>Cliente</Label>
-                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-primary gap-1 px-1" onClick={() => setQuickClienteOpen(true)}>
-                    <Plus className="h-3 w-3" /> Novo
-                  </Button>
-                </div>
-                <Select
-                  value={formData.cliente_id}
-                  onValueChange={(value) => setFormData({ ...formData, cliente_id: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {clientes.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {selectedViagem ? (
-                <div className="grid gap-2">
-                  <Label>Status</Label>
-                  <Select
-                    value={formData.status}
-                    onValueChange={(value) => setFormData({ ...formData, status: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {STATUS_OPTIONS.map((s) => (
-                        <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ) : (
-                <div className="grid gap-2">
-                  <Label>Status inicial</Label>
-                  <Input value="Planejada" disabled />
-                </div>
-              )}
-            </div>
-
-            {/* Veiculo + Motorista */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between">
-                  <Label>Veiculo</Label>
-                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-primary gap-1 px-1" onClick={() => setQuickVeiculoOpen(true)}>
-                    <Plus className="h-3 w-3" /> Novo
-                  </Button>
-                </div>
-                <Select
-                  value={formData.veiculo_id}
-                  onValueChange={(value) => setFormData({ ...formData, veiculo_id: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {veiculos.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>
-                        {v.placa_cavalo} {v.modelo && `- ${v.modelo}`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between">
-                  <Label>Motorista</Label>
-                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-primary gap-1 px-1" onClick={() => setQuickMotoristaOpen(true)}>
-                    <Plus className="h-3 w-3" /> Novo
-                  </Button>
-                </div>
-                <Select
-                  value={formData.motorista_id}
-                  onValueChange={(value) => setFormData({ ...formData, motorista_id: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {motoristas.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>{m.nome}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {/* Rota */}
+      {/* Viagem Form Dialog (edição) */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="w-[95vw] max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Editar ciclo
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSaveCycleTitle} className="space-y-4">
             <div className="grid gap-2">
-              <div className="flex items-center justify-between">
-                <Label>Rota Planejada</Label>
-                <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-primary gap-1 px-1" onClick={() => setQuickRotaOpen(true)}>
-                  <Plus className="h-3 w-3" /> Nova Rota
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">Selecionar a rota preenche origem, destino, km e habilita o planejamento por ponto.</p>
-              <Select
-                value={formData.rota_id}
-                onValueChange={handleRotaSelect}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione uma rota ou preencha manualmente" />
-                </SelectTrigger>
-                <SelectContent>
-                  {rotas.map((r) => (
-                    <SelectItem key={r.id} value={r.id}>
-                      {r.nome} ({r.origem_cidade}/{r.origem_estado} - {r.destino_cidade}/{r.destino_estado})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label>Titulo do ciclo</Label>
+              <Input
+                value={editCicloTitulo}
+                onChange={(e) => setEditCicloTitulo(e.target.value)}
+                placeholder="Ex: Saude Belém - Xinguara"
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                Ao salvar, o sistema atualiza o identificador tecnico do ciclo para todas as viagens agrupadas.
+              </p>
             </div>
 
-            {showAdvancedForm && formData.rota_id && formData.planejamento_rota && (
-              <div className="space-y-4 rounded-lg border border-border/70 bg-muted/20 p-4">
-                <div>
-                  <p className="text-sm font-medium text-foreground">Planejamento da rota</p>
-                  <p className="text-xs text-muted-foreground">
-                    Defina chegada e partida planejadas em cada ponto intermediário da rota.
-                  </p>
-                </div>
-
-                {formData.planejamento_rota.intermediarios.length === 0 && (
-                  <p className="text-xs text-muted-foreground">A rota selecionada não possui pontos intermediários.</p>
-                )}
-
-                {formData.planejamento_rota.intermediarios.length > 0 && (
-                  <div className="space-y-3">
-                    {formData.planejamento_rota.intermediarios.map((ponto, index) => (
-                      <div key={ponto.chave} className="rounded-md border border-border/60 bg-background p-3 space-y-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-medium text-foreground">
-                            {index + 1}. {ponto.cidade}/{ponto.estado}
-                          </p>
-                          <span className="text-xs text-muted-foreground">{getPontoParadaTipoLabel(ponto.tipo_parada)}</span>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="grid gap-2">
-                            <Label>Chegada planejada</Label>
-                            <Input
-                              type="datetime-local"
-                              value={ponto.chegada_planejada || ""}
-                              onChange={(e) => updatePlanejamentoIntermediario(index, "chegada_planejada", e.target.value)}
-                            />
-                          </div>
-                          <div className="grid gap-2">
-                            <Label>Partida planejada</Label>
-                            <Input
-                              type="datetime-local"
-                              value={ponto.partida_planejada || ""}
-                              onChange={(e) => updatePlanejamentoIntermediario(index, "partida_planejada", e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Origem / Destino */}
-            {!formData.rota_id && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Origem</Label>
-                  <Input
-                    value={formData.origem_real}
-                    onChange={(e) => setFormData({ ...formData, origem_real: e.target.value })}
-                    placeholder="Cidade/UF"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Destino</Label>
-                  <Input
-                    value={formData.destino_real}
-                    onChange={(e) => setFormData({ ...formData, destino_real: e.target.value })}
-                    placeholder="Cidade/UF"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Datas */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <Label>Partida planejada</Label>
-                <Input
-                  type="datetime-local"
-                  value={formData.data_inicio}
-                  onChange={(e) => setFormData({ ...formData, data_inicio: e.target.value })}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>Chegada planejada</Label>
-                <Input
-                  type="datetime-local"
-                  value={formData.data_fim}
-                  onChange={(e) => setFormData({ ...formData, data_fim: e.target.value })}
-                />
-              </div>
-            </div>
-
-            {showAdvancedForm && (
-              <div className="space-y-4 rounded-lg border border-border/70 p-4">
-                <div>
-                  <p className="text-sm font-medium text-foreground">Dados complementares</p>
-                  <p className="text-xs text-muted-foreground">Opcional no cadastro inicial. Preencha agora se já tiver os dados.</p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label>Tipo de Carga</Label>
-                    <Input
-                      value={formData.tipo_carga}
-                      onChange={(e) => setFormData({ ...formData, tipo_carga: e.target.value })}
-                      placeholder="Ex: grãos, combustível, refrigerado"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Valor do Frete (R$)</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={formData.valor_frete}
-                      onChange={(e) => setFormData({ ...formData, valor_frete: e.target.value })}
-                      placeholder="0,00"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label>Volume (ton)</Label>
-                    <Input
-                      type="number"
-                      step="0.001"
-                      value={formData.volume_toneladas}
-                      onChange={(e) => setFormData({ ...formData, volume_toneladas: e.target.value })}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>KM</Label>
-                    <Input
-                      type="number"
-                      value={formData.km_real}
-                      onChange={(e) => setFormData({ ...formData, km_real: e.target.value })}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-3 pt-4">
+            <div className="flex justify-end gap-3 pt-2">
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                 Cancelar
               </Button>
