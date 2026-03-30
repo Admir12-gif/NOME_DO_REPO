@@ -992,7 +992,7 @@ export function ViagensClient({
         }}
       >
         <DialogContent className="!w-[96vw] !max-w-[96vw] h-[94vh] overflow-hidden p-0">
-          <DialogHeader>
+          <DialogHeader className="sr-only">
             <DialogTitle>Cockpit da Viagem</DialogTitle>
           </DialogHeader>
           <div className="h-full min-h-0 flex flex-col">

@@ -91,6 +91,8 @@ type EventFormState = {
   observacao: string
   inicio_em: string
   fim_em: string
+  chegada_cliente_em?: string
+  partida_cliente_em?: string
 }
 
 type CostFormState = {
@@ -266,6 +268,15 @@ function formatDurationByUnit(totalMinutes: number) {
   }
 
   return `${minutes} min`
+}
+
+function formatDurationHoursOnly(totalMinutes: number) {
+  const minutes = Math.max(0, Number(totalMinutes) || 0)
+  if (minutes <= 0) return "-"
+
+  const hours = minutes / 60
+  const value = Number.isInteger(hours) ? hours.toString() : hours.toFixed(1).replace(".0", "")
+  return `${value} h`
 }
 
 function toDatetimeLocal(value?: string | null) {
@@ -459,6 +470,8 @@ export function ViagemDetalheClient({
     observacao: "",
     inicio_em: "",
     fim_em: "",
+    chegada_cliente_em: "",
+    partida_cliente_em: "",
   })
   const [passagemPontoSelecionado, setPassagemPontoSelecionado] = useState("")
   const [novoPontoPassagem, setNovoPontoPassagem] = useState("")
@@ -813,6 +826,8 @@ export function ViagemDetalheClient({
       observacao: "",
       inicio_em: "",
       fim_em: "",
+      chegada_cliente_em: "",
+      partida_cliente_em: "",
     })
   }, [subViagemAtivaId])
 
@@ -1988,7 +2003,7 @@ export function ViagemDetalheClient({
     }
 
     if ((viagemState.atraso_estimado_minutos || 0) > 0) {
-      itens.push(`Atraso estimado de ${formatDurationByUnit(Number(viagemState.atraso_estimado_minutos || 0))}.`)
+      itens.push(`Atraso estimado de ${formatDurationHoursOnly(Number(viagemState.atraso_estimado_minutos || 0))}.`)
     }
 
     if (tempoTotalParadoMin >= 120) {
@@ -2121,6 +2136,8 @@ export function ViagemDetalheClient({
       fim_em: toDatetimeLocal(evento.previsto_em || evento.ocorrido_em),
       origem: String((evento.payload as Record<string, unknown> | null)?.origem || ""),
       destino: String((evento.payload as Record<string, unknown> | null)?.destino || ""),
+      chegada_cliente_em: (evento.payload as Record<string, unknown> | null)?.chegada_cliente_em ? toDatetimeLocal((evento.payload as Record<string, unknown>).chegada_cliente_em as string) : "",
+      partida_cliente_em: (evento.payload as Record<string, unknown> | null)?.partida_cliente_em ? toDatetimeLocal((evento.payload as Record<string, unknown>).partida_cliente_em as string) : "",
     })
     setQuickActionStep('form')
     setEventModalOpen(false)
@@ -2402,6 +2419,8 @@ export function ViagemDetalheClient({
       observacao: "",
       inicio_em: nowLocal,
       fim_em: nowLocal,
+      chegada_cliente_em: "",
+      partida_cliente_em: "",
     })
     if (type === "abastecimento") {
       setAbastecimentoForm({
@@ -2576,6 +2595,8 @@ export function ViagemDetalheClient({
       observacao: modo === "planejado" ? "Planejado por ação rápida." : "Registrado por ação rápida.",
       inicio_em: nowLocal,
       fim_em: nowLocal,
+      chegada_cliente_em: "",
+      partida_cliente_em: "",
     })
     if (action.type === "abastecimento") {
       setAbastecimentoForm({
@@ -2977,12 +2998,6 @@ export function ViagemDetalheClient({
         return
       }
 
-      if (Number(abastecimentoForm.litros_thermo_king) > 0 && !abastecimentoForm.hora_thermo_king) {
-        alert("Informe a Hora Thermo King quando houver abastecimento de Thermo King.")
-        setLoading(false)
-        return
-      }
-
       if (Number(abastecimentoForm.litros_thermo_king) > 0 && !abastecimentoForm.valor_litro_thermo_king) {
         alert("Informe o valor por litro do Thermo King.")
         setLoading(false)
@@ -3035,6 +3050,8 @@ export function ViagemDetalheClient({
         lancamento_modo: eventoLancamentoModo,
         origem: eventForm.origem || null,
         destino: eventForm.destino || null,
+        chegada_cliente_em: eventForm.chegada_cliente_em ? toIsoOrNull(eventForm.chegada_cliente_em) : null,
+        partida_cliente_em: eventForm.partida_cliente_em ? toIsoOrNull(eventForm.partida_cliente_em) : null,
       }
 
 
@@ -4032,9 +4049,6 @@ export function ViagemDetalheClient({
                       {/* Cabeçalho com título + badges de estado */}
                       <div className="flex flex-wrap items-center gap-2">
                         <h2 className="text-lg font-bold tracking-tight">CICLO TRANSLOG</h2>
-                        <Badge className={`${healthScoreLabel.bg} ${healthScoreLabel.color} border-transparent font-semibold`}>
-                          {healthScoreLabel.label} · {healthScore}/100
-                        </Badge>
                         {subViagemAtivaId && (
                           <Badge className="bg-blue-100 text-blue-800 border-blue-200">
                             Sub-viagem ativa
@@ -4046,11 +4060,6 @@ export function ViagemDetalheClient({
                           </Badge>
                         )}
                         {cicloFechado && <Badge className="bg-red-100 text-red-800 border-red-200">Ciclo fechado</Badge>}
-                        {atrasoAcumuladoCicloMin > 0 && (
-                          <Badge className="bg-red-100 text-red-800 border-red-200">
-                            +{formatDurationByUnit(atrasoAcumuladoCicloMin)} atraso
-                          </Badge>
-                        )}
                       </div>
 
                       {/* Progresso da rota */}
@@ -4095,7 +4104,6 @@ export function ViagemDetalheClient({
                         <p className="text-muted-foreground">Veículo: <span className="font-medium text-foreground">{veiculoAtual?.placa_cavalo || "A DEFINIR"}</span></p>
                         <p className="text-muted-foreground">Motorista: <span className="font-medium text-foreground">{motoristaAtual?.nome || "A DEFINIR"}</span></p>
                         <p className="text-muted-foreground col-span-2 sm:col-span-1">ID ciclo: <span className="font-medium text-foreground text-xs">{cicloIdReferencia}</span></p>
-                        <p className="text-muted-foreground">Fase: <span className="font-semibold text-foreground">{faseOperacional}</span></p>
                         <p className="text-muted-foreground">Docs: <span className="font-medium text-foreground">{documentos.length}</span></p>
                       </div>
 
@@ -4116,16 +4124,6 @@ export function ViagemDetalheClient({
                         </p>
                       </div>
 
-                      {/* Próxima melhor ação */}
-                      {acoesRecomendadas.length > 0 && (
-                        <div className="rounded-md border border-primary/20 bg-primary/5 px-2 py-1">
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-primary/70 mb-1">Próxima ação recomendada</p>
-                          <p className="text-xs sm:text-sm text-foreground leading-snug">{acoesRecomendadas[0]}</p>
-                          {acoesRecomendadas.length > 1 && (
-                            <p className="text-xs text-muted-foreground mt-0.5">{acoesRecomendadas[1]}</p>
-                          )}
-                        </div>
-                      )}
                     </CardContent>
                   </Card>
 
@@ -4134,9 +4132,6 @@ export function ViagemDetalheClient({
                     <CardHeader className="pb-1 px-3">
                       <div className="flex items-center justify-between">
                         <CardTitle className="text-lg">ALERTAS / PENDÊNCIAS</CardTitle>
-                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ${healthScoreLabel.bg} ${healthScoreLabel.color} ${healthScoreLabel.ring}`}>
-                          Health {healthScore}/100
-                        </span>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-1 pt-0 px-3">
@@ -4316,49 +4311,6 @@ export function ViagemDetalheClient({
               {/* Indicadores compactos no canto direito */}
               <Card className="border-border/60 shadow-sm py-2 gap-1">
                 <CardContent className="p-2 sm:p-2.5 space-y-2">
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Críticos</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className={`rounded-lg border p-2 ${healthScoreLabel.ring}`}>
-                      <p className="text-[10px] text-muted-foreground">Health</p>
-                      <p className={`text-lg sm:text-xl font-bold leading-none ${healthScoreLabel.color}`}>{healthScore}</p>
-                      <p className={`text-[11px] ${healthScoreLabel.color}`}>{healthScoreLabel.label}</p>
-                    </div>
-                    <div className={`rounded-lg border p-2 ${atrasoAcumuladoCicloMin > 0 ? "border-red-300" : "border-border/60"}`}>
-                      <p className="text-[10px] text-muted-foreground">Atraso</p>
-                      <p className={`text-base sm:text-lg font-bold leading-none ${atrasoAcumuladoCicloMin > 0 ? "text-red-700" : "text-emerald-700"}`}>
-                        {atrasoAcumuladoCicloMin > 0 ? `+${formatDurationByUnit(atrasoAcumuladoCicloMin)}` : "No prazo"}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">SLA</p>
-                    </div>
-                    <div className="sm:col-span-2 rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Autonomia estimada</p>
-                      <p className="text-base sm:text-lg font-bold text-foreground leading-tight break-words">
-                        {autonomiaRestanteKm !== null ? `${autonomiaRestanteKm.toLocaleString("pt-BR")} km` : "-"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Performance</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="sm:col-span-2 rounded-lg border border-border/60 p-2">
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="text-[10px] text-muted-foreground">Progresso da rota</p>
-                        <span className="text-[11px] font-semibold">{progressoRotaPercent.toFixed(0)}%</span>
-                      </div>
-                      <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${progressoRotaPercent}%` }} />
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Movimento</p>
-                      <p className="text-lg sm:text-xl font-bold leading-none">{eficienciaMovimentoPercent !== null ? `${eficienciaMovimentoPercent}%` : "-"}</p>
-                    </div>
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Eventos</p>
-                      <p className="text-lg sm:text-xl font-bold leading-none">{eventosRealizados.length} / {eventosRealizados.length + eventosPlanejados.length}</p>
-                    </div>
-                  </div>
-
                   <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Financeiro</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="rounded-lg border border-border/60 p-2">
@@ -4376,6 +4328,47 @@ export function ViagemDetalheClient({
                     <div className="rounded-lg border border-border/60 p-2">
                       <p className="text-[10px] text-muted-foreground">R$/km</p>
                       <p className="text-sm sm:text-base font-bold leading-tight break-words">{custoPorKm > 0 ? formatCurrency(custoPorKm) : "-"}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-border/60 shadow-sm py-2 gap-1">
+                <CardContent className="p-2 sm:p-2.5 space-y-2">
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Abastecimento</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Consumo km/L</p>
+                      <p className="text-sm sm:text-base font-bold leading-tight break-words">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)} km/L` : "-"}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Litros abastecidos</p>
+                      <p className="text-sm sm:text-base font-bold leading-tight break-words">{abastecimentosResumo.litros > 0 ? `${abastecimentosResumo.litros.toFixed(2)} L` : "-"}</p>
+                    </div>
+                    <div className="sm:col-span-2 rounded-lg border border-border/60 p-2">
+                      <p className="text-[10px] text-muted-foreground">Valor total abastecido</p>
+                      <p className="text-sm sm:text-base font-bold text-red-700 leading-tight break-all">{abastecimentosResumo.custo > 0 ? formatCurrency(abastecimentosResumo.custo) : "-"}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-border/60 shadow-sm py-2 gap-1">
+                <CardContent className="p-2 sm:p-2.5 space-y-2">
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Performance</p>
+                  <div className="grid grid-cols-1 gap-2">
+                    <div className="rounded-lg border border-border/60 p-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[10px] text-muted-foreground">Progresso da rota</p>
+                        <span className="text-[11px] font-semibold">{progressoRotaPercent.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${progressoRotaPercent}%` }} />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                        <span>{kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km percorridos` : "0 km percorridos"}</span>
+                        <span>{kmRestanteAutomatico > 0 ? `${kmRestanteAutomatico.toLocaleString("pt-BR")} km restantes` : "0 km restantes"}</span>
+                      </div>
                     </div>
                   </div>
                 </CardContent>
@@ -4502,7 +4495,7 @@ export function ViagemDetalheClient({
                                 </div>
 
                                 <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">2. DADOS DO EVENTO</h3>
+                                  <h3 className="text-xs font-bold text-primary">2. Data e hora do evento</h3>
                                 </div>
                                 <div>
                                   <Label className="text-xs font-semibold">Data/Hora Início *</Label>
@@ -4518,11 +4511,21 @@ export function ViagemDetalheClient({
                                 </div>
                                 <div>
                                   <Label className="text-xs font-semibold">Motorista</Label>
-                                  <Input className="text-sm" value={abastecimentoForm.motorista} onChange={e => setAbastecimentoForm(f => ({ ...f, motorista: e.target.value }))} placeholder="Nome do motorista" />
+                                  <Select value={abastecimentoForm.motorista} onValueChange={v => setAbastecimentoForm(f => ({ ...f, motorista: v }))}>
+                                    <SelectTrigger className="text-sm">
+                                      <SelectValue placeholder="Selecione um motorista" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="">Nenhum</SelectItem>
+                                      {motoristasCadastro.map((m) => (
+                                        <SelectItem key={m.id} value={m.nome || ""}>{m.nome}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
                                 </div>
 
                                 <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">3. MEDIÇÃO OPERACIONAL</h3>
+                                  <h3 className="text-xs font-bold text-primary">3. Dados do abastecimento</h3>
                                 </div>
                                 <div>
                                   <Label className="text-xs font-semibold">Hodômetro (km) *</Label>
@@ -4562,12 +4565,6 @@ export function ViagemDetalheClient({
                                   <Label className="text-xs font-semibold">Valor por litro - Thermo King</Label>
                                   <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.valor_litro_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_litro_thermo_king: e.target.value }))} placeholder="Ex: 6.49" />
                                 </div>
-                                {Number(abastecimentoForm.litros_thermo_king) > 0 && (
-                                  <div>
-                                    <Label className="text-xs font-semibold">Hora Thermo King (h) *</Label>
-                                    <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.hora_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, hora_thermo_king: e.target.value }))} placeholder="Ex: 245.5" required />
-                                  </div>
-                                )}
                                 <div>
                                   <Label className="text-xs font-semibold">Abasteceu ARLA? (Sim/Não)</Label>
                                   <Select value={abastecimentoForm.abasteceu_arla} onValueChange={v => setAbastecimentoForm(f => ({ ...f, abasteceu_arla: v as 'sim' | 'nao' }))}>
@@ -4759,21 +4756,14 @@ export function ViagemDetalheClient({
                             )}
                             {selectedQuickAction && selectedQuickAction.type === 'parada' && (
                               <div className="space-y-4">
-                                <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1.7fr)_300px]">
-                                  <div className="rounded-2xl border border-border/60 bg-white/90 p-4 shadow-sm">
-                                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-3">
-                                      <div>
-                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary/70">Parada operacional</p>
-                                        <h3 className="text-lg font-semibold text-foreground">Lançamento de parada</h3>
-                                        <p className="text-sm text-muted-foreground">Organize o registro com tipo, janela operacional e contexto do local.</p>
-                                      </div>
-                                      <div className="rounded-2xl border border-primary/15 bg-primary/5 px-4 py-3 text-right">
-                                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary/70">Classificação</p>
-                                        <p className="text-base font-semibold text-foreground">{paradaTipoLabel}</p>
-                                      </div>
-                                    </div>
+                                <div className="rounded-2xl border border-border/60 bg-white/90 p-4 shadow-sm">
+                                  <div className="border-b border-border/60 pb-3 mb-4">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary/70">Parada operacional</p>
+                                    <h3 className="text-lg font-semibold text-foreground">Lançamento de parada</h3>
+                                    <p className="text-sm text-muted-foreground">Organize o registro com tipo, janela operacional e contexto do local.</p>
+                                  </div>
 
-                                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                                  <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                                       <div className="xl:col-span-1">
                                         <Label className="text-xs font-semibold">Tipo de Parada *</Label>
                                         <Select value={tipoParadaSelecionado} onValueChange={v => setTipoParadaSelecionado(v as any)}>
@@ -4799,42 +4789,24 @@ export function ViagemDetalheClient({
                                         <Label className="text-xs font-semibold">Local</Label>
                                         <Input className="mt-1 text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} placeholder="Ex: Cliente, pátio, posto, base operacional" required />
                                       </div>
+                                      {(tipoParadaSelecionado === 'carga' || tipoParadaSelecionado === 'descarga') && (
+                                        <>
+                                          <div className="md:col-span-1 xl:col-span-1">
+                                            <Label className="text-xs font-semibold">Chegada no cliente</Label>
+                                            <Input type="datetime-local" className="mt-1 text-sm" value={eventForm.chegada_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
+                                          </div>
+                                          <div className="md:col-span-1 xl:col-span-1">
+                                            <Label className="text-xs font-semibold">Partida no cliente</Label>
+                                            <Input type="datetime-local" className="mt-1 text-sm" value={eventForm.partida_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
+                                          </div>
+                                        </>
+                                      )}
                                       <div className="md:col-span-2 xl:col-span-3">
                                         <Label className="text-xs font-semibold">Observação</Label>
                                         <Textarea className="mt-1 text-sm" rows={4} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Detalhe o motivo, a operação executada ou qualquer contexto relevante." />
                                       </div>
                                     </div>
                                   </div>
-
-                                  <div className="space-y-3">
-                                    <div className="rounded-2xl border border-blue-200/70 bg-gradient-to-br from-blue-50 via-white to-slate-50 p-4 shadow-sm">
-                                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-700">Resumo</p>
-                                      <div className="mt-3 space-y-3">
-                                        <div>
-                                          <p className="text-xs text-muted-foreground">Tipo</p>
-                                          <p className="text-base font-semibold text-foreground">{paradaTipoLabel}</p>
-                                        </div>
-                                        <div>
-                                          <p className="text-xs text-muted-foreground">Duração estimada</p>
-                                          <p className="text-2xl font-bold text-foreground">{paradaDuracaoFormatada}</p>
-                                        </div>
-                                        <div>
-                                          <p className="text-xs text-muted-foreground">Status do lançamento</p>
-                                          <p className="text-sm font-semibold text-foreground">{eventForm.fim_em ? "Parada com início e fim" : "Parada ainda sem fim registrado"}</p>
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-border/60 bg-white/85 p-4 shadow-sm">
-                                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Boas práticas</p>
-                                      <div className="mt-3 space-y-2 text-sm text-muted-foreground">
-                                        <p>Use início e fim para medir tempos de carga, descarga e descanso.</p>
-                                        <p>Em ocorrência, detalhe causa, impacto e ação imediata.</p>
-                                        <p>Preencha o local com referência operacional clara para auditoria.</p>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
 
                                 {tipoParadaSelecionado === 'ocorrencia' && (
                                   <div className="rounded-2xl border border-amber-200/70 bg-gradient-to-br from-amber-50 via-white to-orange-50 p-4 shadow-sm">
