@@ -7,12 +7,12 @@ export const metadata = {
 
 export default function AbastecimentosPage() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Abastecimentos</h1>
-        <p className="text-muted-foreground">
-          Registre e acompanhe os abastecimentos dos veiculos
-        </p>
+    <div className="space-y-5">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Abastecimentos</h1>
+          <p className="page-subtitle">Controle de abastecimento e consumo de combustível</p>
+        </div>
       </div>
       <AbastecimentosClient />
     </div>

@@ -1,8 +1,9 @@
+// app/(dashboard)/financeiro/acerto-caixa/page.tsx
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { AnaliticoClient } from './analitico-client'
+import { AcertoCaixaClient } from './acerto-caixa-client'
 
-export default async function AnaliticoPage() {
+export default async function AcertoCaixaPage() {
   const supabase = await createClient()
 
   const {
@@ -17,11 +18,11 @@ export default async function AnaliticoPage() {
     <div className="space-y-5">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Análise de Rentabilidade</h1>
-          <p className="page-subtitle">Drilldown de receitas, custos e lucratividade por cliente, rota e veículo</p>
+          <h1 className="page-title">Acerto de Caixa</h1>
+          <p className="page-subtitle">Reconciliação de contas e controle do fluxo de caixa</p>
         </div>
       </div>
-      <AnaliticoClient userId={user.id} />
+      <AcertoCaixaClient userId={user.id} />
     </div>
   )
 }

@@ -117,10 +117,12 @@ const STATUS_OPTIONS = [
 ]
 
 const statusColors: Record<string, string> = {
-  Planejada: "bg-muted text-muted-foreground",
-  "Em andamento": "bg-primary/10 text-primary",
-  Concluida: "bg-success/10 text-success",
-  Cancelada: "bg-destructive/10 text-destructive",
+  Planejada: "badge-planejada",
+  "Em andamento": "badge-andamento",
+  Concluida: "badge-concluida",
+  Cancelada: "badge-cancelada",
+  Planeado: "badge-planejada",
+  Realizado: "badge-concluida",
 }
 
 function normalizeViagemStatus(status?: string | null) {
@@ -817,203 +819,225 @@ export function ViagensClient({
   })
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-5">
+      {/* Page Header */}
+      <div className="page-header">
         <div>
-          <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
-            <Route className="h-7 w-7 text-primary" />
-            Ciclos
-          </h1>
-          <p className="text-muted-foreground">
-            Gerencie os ciclos da sua transportadora
-          </p>
+          <h1 className="page-title">Ciclos de Viagem</h1>
+          <p className="page-subtitle">Gerencie os ciclos e operações da transportadora</p>
         </div>
-        <Button onClick={handleAdd}>
-          <Plus className="h-4 w-4 mr-2" />
+        <Button onClick={handleAdd} size="sm" className="gap-1.5">
+          <Plus className="h-4 w-4" />
           Novo Ciclo
         </Button>
       </div>
 
-      {/* Search */}
-      <div className="flex items-center gap-4">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar ciclos..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
+      {/* Search + Tabs bar */}
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60">
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Buscar por cliente, motorista, rota..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 h-8 text-sm"
+            />
+          </div>
+          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground tabular">{ciclosFiltrados.length}</span>
+            ciclo(s)
+          </div>
         </div>
+
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <div className="px-4 pt-2 pb-0">
+            <TabsList className="h-8 bg-muted/50">
+              <TabsTrigger value="todas" className="text-xs h-7">
+                Todos <span className="ml-1.5 tabular font-semibold">{ciclosResumo.length}</span>
+              </TabsTrigger>
+              <TabsTrigger value="planeados" className="text-xs h-7">
+                Planejados <span className="ml-1.5 tabular font-semibold">{ciclosResumo.filter(c => c.statusCiclo === "Planeado").length}</span>
+              </TabsTrigger>
+              <TabsTrigger value="realizados" className="text-xs h-7">
+                Realizados <span className="ml-1.5 tabular font-semibold">{ciclosResumo.filter(c => c.statusCiclo === "Realizado").length}</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent value={activeTab} className="p-4 pt-3">
+            {ciclosFiltrados.length > 0 ? (
+              <div className="space-y-2">
+                {ciclosFiltrados.map((ciclo) => {
+                  const viagem = ciclo.viagemDestaque
+                  const statusNorm = normalizeViagemStatus(viagem.status)
+                  return (
+                    <div
+                      key={ciclo.cicloId}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => handleOpenCockpitModal(viagem.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault()
+                          handleOpenCockpitModal(viagem.id)
+                        }
+                      }}
+                      className="group flex items-center gap-4 p-4 rounded-lg border border-border/60 bg-background hover:border-primary/40 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-150 cursor-pointer"
+                    >
+                      {/* Status dot + icon */}
+                      <div className="flex-shrink-0">
+                        <div className={`h-10 w-10 rounded-lg flex items-center justify-center transition-colors ${
+                          statusNorm === "Em andamento" ? "bg-blue-100" :
+                          statusNorm === "Concluida" ? "bg-emerald-100" :
+                          statusNorm === "Cancelada" ? "bg-rose-100" : "bg-slate-100"
+                        }`}>
+                          <Truck className={`h-5 w-5 ${
+                            statusNorm === "Em andamento" ? "text-blue-600" :
+                            statusNorm === "Concluida" ? "text-emerald-600" :
+                            statusNorm === "Cancelada" ? "text-rose-600" : "text-slate-500"
+                          }`} />
+                        </div>
+                      </div>
+
+                      {/* Main info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="text-sm font-semibold text-foreground truncate max-w-xs">{ciclo.cicloId}</span>
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border flex-shrink-0 ${statusColors[ciclo.statusCiclo] || "badge-planejada"}`}>
+                            {ciclo.statusCiclo}
+                          </span>
+                          {ciclo.viagens.length > 1 && (
+                            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border flex-shrink-0">
+                              {ciclo.viagens.length} etapas
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+                          {viagem.cliente?.nome && (
+                            <span className="flex items-center gap-1">
+                              <Users className="h-3 w-3" />{viagem.cliente.nome}
+                            </span>
+                          )}
+                          {viagem.motorista?.nome && (
+                            <span className="flex items-center gap-1">
+                              <User className="h-3 w-3" />{viagem.motorista.nome}
+                            </span>
+                          )}
+                          {viagem.veiculo?.placa_cavalo && (
+                            <span className="flex items-center gap-1">
+                              <Truck className="h-3 w-3" />{viagem.veiculo.placa_cavalo}
+                            </span>
+                          )}
+                          {viagem.data_inicio && (
+                            <span className="flex items-center gap-1">
+                              <Calendar className="h-3 w-3" />{formatDate(viagem.data_inicio)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Values */}
+                      <div className="text-right flex-shrink-0 hidden sm:block">
+                        <p className="text-sm font-bold text-foreground tabular">
+                          {ciclo.valorTotal > 0 ? formatCurrency(ciclo.valorTotal) : "—"}
+                        </p>
+                        <p className="text-xs text-muted-foreground tabular">
+                          {ciclo.kmTotal ? `${ciclo.kmTotal.toLocaleString("pt-BR")} km` : "—"}
+                        </p>
+                      </div>
+
+                      {/* Actions */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+                          <DropdownMenuItem onClick={() => handleEdit(ciclo)}>
+                            <Pencil className="h-4 w-4 mr-2" />Editar ciclo
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {statusNorm === "Em andamento" && (
+                            <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Concluida")}>
+                              <CheckCircle className="h-4 w-4 mr-2 text-emerald-600" />Concluir
+                            </DropdownMenuItem>
+                          )}
+                          {statusNorm !== "Cancelada" && statusNorm !== "Concluida" && (
+                            <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Cancelada")}>
+                              <XCircle className="h-4 w-4 mr-2 text-rose-600" />Cancelar
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => handleDelete(viagem)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />Excluir
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="py-14 text-center">
+                <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center mx-auto mb-3">
+                  <Route className="h-6 w-6 text-muted-foreground/50" />
+                </div>
+                <p className="text-sm font-medium text-foreground mb-1">Nenhum ciclo encontrado</p>
+                <p className="text-xs text-muted-foreground mb-4">
+                  {search ? "Tente outros termos de busca" : "Crie o primeiro ciclo de viagem"}
+                </p>
+                {!search && (
+                  <Button size="sm" onClick={handleAdd} className="gap-1.5">
+                    <Plus className="h-4 w-4" />Novo Ciclo
+                  </Button>
+                )}
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
 
-      {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="todas">Todas ({ciclosResumo.length})</TabsTrigger>
-          <TabsTrigger value="planeados">Planeados ({ciclosResumo.filter(c => c.statusCiclo === "Planeado").length})</TabsTrigger>
-          <TabsTrigger value="realizados">Realizados ({ciclosResumo.filter(c => c.statusCiclo === "Realizado").length})</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value={activeTab} className="mt-4">
-          {ciclosFiltrados.length > 0 ? (
-            <div className="grid gap-4">
-              {ciclosFiltrados.map((ciclo) => {
-                const viagem = ciclo.viagemDestaque
-                return (
-                <Card
-                  key={ciclo.cicloId}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleOpenCockpitModal(viagem.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault()
-                      handleOpenCockpitModal(viagem.id)
-                    }
-                  }}
-                  className="group cursor-pointer border-border/50 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg hover:border-primary/50 hover:bg-primary/5"
-                >
-                  <CardContent className="p-4 transition-colors duration-300 group-hover:bg-primary/10">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-4">
-                        <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center transition-all duration-300 group-hover:bg-primary/15 group-hover:scale-105">
-                          <Truck className="h-6 w-6 text-primary transition-transform duration-300 group-hover:scale-110" />
-                        </div>
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-medium text-foreground">{ciclo.cicloId}</span>
-                            <Badge className={statusColors[ciclo.statusCiclo]}>
-                              {ciclo.statusCiclo}
-                            </Badge>
-                            <Badge variant="outline">{ciclo.viagens.length} viagem(ns)</Badge>
-                          </div>
-                          <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
-                            <span className="flex items-center gap-1">
-                              <Users className="h-3 w-3" />
-                              {viagem.cliente?.nome || "Sem cliente"}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <User className="h-3 w-3" />
-                              {viagem.motorista?.nome || "Sem motorista"}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Truck className="h-3 w-3" />
-                              {viagem.veiculo?.placa_cavalo || "Sem veiculo"}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              {formatDate(viagem.data_inicio)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <p className="font-semibold text-foreground flex items-center gap-1 justify-end">
-                            <DollarSign className="h-4 w-4 text-success" />
-                            {formatCurrency(ciclo.valorTotal)}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            {ciclo.kmTotal ? `${ciclo.kmTotal.toLocaleString("pt-BR")} km` : "-"}
-                          </p>
-                        </div>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={(event) => event.stopPropagation()}
-                              onKeyDown={(event) => event.stopPropagation()}
-                            >
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-                            <DropdownMenuItem onClick={() => handleEdit(ciclo)}>
-                              <Pencil className="h-4 w-4 mr-2" />
-                              Editar
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            {normalizeViagemStatus(viagem.status) === "Em andamento" && (
-                              <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Concluida")}>
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                                Concluir Viagem
-                              </DropdownMenuItem>
-                            )}
-                            {normalizeViagemStatus(viagem.status) !== "Cancelada" && normalizeViagemStatus(viagem.status) !== "Concluida" && (
-                              <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Cancelada")}>
-                                <XCircle className="h-4 w-4 mr-2" />
-                                Cancelar
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => handleDelete(viagem)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Excluir
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-                )
-              })}
-            </div>
-          ) : (
-            <Card className="border-border/50">
-              <CardContent className="py-12 text-center">
-                <Route className="h-12 w-12 mx-auto mb-3 text-muted-foreground/50" />
-                <p className="text-muted-foreground">Nenhum ciclo encontrado</p>
-                <Button variant="outline" className="mt-4 bg-transparent" onClick={handleAdd}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Criar primeiro ciclo
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
-      </Tabs>
-
+      {/* Cockpit Modal */}
       <Dialog
         open={cockpitOpen}
         onOpenChange={(open) => {
           setCockpitOpen(open)
-          if (!open) {
-            setCockpitData(null)
-            setCockpitLoading(false)
-          }
+          if (!open) { setCockpitData(null); setCockpitLoading(false) }
         }}
       >
-        <DialogContent className="!w-[96vw] !max-w-[96vw] h-[94vh] overflow-hidden p-0">
+        <DialogContent className="!w-[97vw] !max-w-[97vw] h-[95vh] overflow-hidden p-0 rounded-xl">
           <DialogHeader className="sr-only">
             <DialogTitle>Cockpit da Viagem</DialogTitle>
           </DialogHeader>
           <div className="h-full min-h-0 flex flex-col">
-            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-4 sm:py-4 bg-muted/20">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-background">
               {cockpitLoading && (
-                <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                  Carregando cockpit...
+                <div className="h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                  <div className="h-8 w-8 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+                  <p className="text-sm">Carregando cockpit...</p>
                 </div>
               )}
               {!cockpitLoading && cockpitData && (
-                <div className="w-full">
-                  <ViagemDetalheClient
-                    viagem={cockpitData.viagem}
-                    initialEventos={cockpitData.eventos}
-                    initialCustos={cockpitData.custos}
-                    initialReceitas={cockpitData.receitas}
-                    initialDocumentos={cockpitData.documentos}
-                    etaParametros={cockpitData.parametros}
-                    embedded
-                  />
-                </div>
+                <ViagemDetalheClient
+                  viagem={cockpitData.viagem}
+                  initialEventos={cockpitData.eventos}
+                  initialCustos={cockpitData.custos}
+                  initialReceitas={cockpitData.receitas}
+                  initialDocumentos={cockpitData.documentos}
+                  etaParametros={cockpitData.parametros}
+                  embedded
+                />
               )}
               {!cockpitLoading && !cockpitData && (
                 <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
@@ -1029,61 +1053,56 @@ export function ViagensClient({
       <Dialog open={isNovoCicloDialogOpen} onOpenChange={setIsNovoCicloDialogOpen}>
         <DialogContent className="w-[95vw] max-w-md">
           <DialogHeader>
-            <DialogTitle>Novo Ciclo</DialogTitle>
+            <DialogTitle>Novo Ciclo de Viagem</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleCreateCycle} className="space-y-4">
-            <div className="grid gap-2">
-              <Label>Titulo do ciclo</Label>
+          <form onSubmit={handleCreateCycle} className="space-y-4 pt-1">
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Nome do ciclo</Label>
               <Input
                 value={novoCicloTitulo}
                 onChange={(e) => setNovoCicloTitulo(e.target.value)}
-                placeholder="Ex: Saude Belém - Xinguara"
+                placeholder="Ex: Saúde Belém → Xinguara"
                 autoFocus
+                className="h-9"
               />
               <p className="text-xs text-muted-foreground">
-                O sistema gera automaticamente o ID tecnico do ciclo no banco.
+                Um ID técnico será gerado automaticamente.
               </p>
             </div>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <Button type="button" variant="outline" onClick={() => setIsNovoCicloDialogOpen(false)}>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="outline" size="sm" onClick={() => setIsNovoCicloDialogOpen(false)}>
                 Cancelar
               </Button>
-              <Button type="submit" disabled={isCreatingCycle || !novoCicloTitulo.trim()}>
-                {isCreatingCycle ? "Criando..." : "Criar ciclo"}
+              <Button type="submit" size="sm" disabled={isCreatingCycle || !novoCicloTitulo.trim()}>
+                {isCreatingCycle ? "Criando..." : "Criar e abrir cockpit"}
               </Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* Viagem Form Dialog (edição) */}
+      {/* Editar Ciclo Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="w-[95vw] max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              Editar ciclo
-            </DialogTitle>
+            <DialogTitle>Editar ciclo</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleSaveCycleTitle} className="space-y-4">
-            <div className="grid gap-2">
-              <Label>Titulo do ciclo</Label>
+          <form onSubmit={handleSaveCycleTitle} className="space-y-4 pt-1">
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Nome do ciclo</Label>
               <Input
                 value={editCicloTitulo}
                 onChange={(e) => setEditCicloTitulo(e.target.value)}
-                placeholder="Ex: Saude Belém - Xinguara"
+                placeholder="Ex: Saúde Belém → Xinguara"
                 autoFocus
+                className="h-9"
               />
-              <p className="text-xs text-muted-foreground">
-                Ao salvar, o sistema atualiza o identificador tecnico do ciclo para todas as viagens agrupadas.
-              </p>
             </div>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="outline" size="sm" onClick={() => setIsDialogOpen(false)}>
                 Cancelar
               </Button>
-              <Button type="submit" disabled={isLoading}>
+              <Button type="submit" size="sm" disabled={isLoading}>
                 {isLoading ? "Salvando..." : "Salvar"}
               </Button>
             </div>
@@ -1095,10 +1114,9 @@ export function ViagensClient({
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirmar exclusao</AlertDialogTitle>
+            <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
             <AlertDialogDescription>
-              Tem certeza que deseja excluir esta viagem?
-              Esta acao nao pode ser desfeita.
+              Esta ação removerá a viagem permanentemente e não pode ser desfeita.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

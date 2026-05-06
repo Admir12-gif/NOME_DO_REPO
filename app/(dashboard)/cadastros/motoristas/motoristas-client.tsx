@@ -190,32 +190,27 @@ export function MotoristasClient({ initialMotoristas }: MotoristasClientProps) {
   ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
-          <Users className="h-7 w-7 text-primary" />
-          Motoristas
-        </h1>
-        <p className="text-muted-foreground">
-          Gerencie os motoristas da sua transportadora
-        </p>
+    <div className="space-y-5">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Motoristas</h1>
+          <p className="page-subtitle">Cadastro e gestão de motoristas da frota</p>
+        </div>
       </div>
 
-      <Card className="border-border/50">
-        <CardContent className="pt-6">
-          <DataTable
-            data={motoristas}
-            columns={columns}
-            searchKey="nome"
-            searchPlaceholder="Buscar motorista..."
-            onAdd={handleAdd}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            addLabel="Novo Motorista"
-            emptyMessage="Nenhum motorista cadastrado"
-          />
-        </CardContent>
-      </Card>
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm p-5">
+        <DataTable
+          data={motoristas}
+          columns={columns}
+          searchKey="nome"
+          searchPlaceholder="Buscar por nome, CPF..."
+          onAdd={handleAdd}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          addLabel="Novo Motorista"
+          emptyMessage="Nenhum motorista cadastrado"
+        />
+      </div>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-md">

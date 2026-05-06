@@ -51,7 +51,7 @@ export default async function ViagemDetalhePage({ params }: ViagemDetalhePagePro
       .eq("ativo", true),
     supabase
       .from("viagens")
-      .select("id, data_inicio, data_fim, status")
+      .select("*")
       .eq("viagem_pai_id", viagemId)
       .order("data_inicio", { ascending: false }),
   ])

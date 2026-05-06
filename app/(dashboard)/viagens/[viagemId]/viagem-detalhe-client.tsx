@@ -1,18 +1,21 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import {
   ArrowLeft,
+  ArrowRightLeft,
   Camera,
   Circle,
   Clock3,
   FileText,
   Fuel,
   Loader2,
+  MapPin,
   Plus,
   Route,
   TriangleAlert,
+  Wrench,
 } from "lucide-react"
 
 import { createClient } from "@/lib/supabase/client"
@@ -552,6 +555,10 @@ export function ViagemDetalheClient({
     status: "Planejada",
   })
 
+  const [editingViagemId, setEditingViagemId] = useState<string | null>(null)
+  const [deleteViagemId, setDeleteViagemId] = useState<string | null>(null)
+  const [deleteViagemDialogOpen, setDeleteViagemDialogOpen] = useState(false)
+
   const [costForm, setCostForm] = useState<CostFormState>({
     data: new Date().toISOString().split("T")[0],
     categoria: "Diesel",
@@ -894,7 +901,19 @@ export function ViagemDetalheClient({
     [eventosRealizados],
   )
 
-  const custosTotal = useMemo(() => custos.reduce((sum, item) => sum + Number(item.valor || 0), 0), [custos])
+  const custoAbastecimentoEventos = useMemo(() => {
+    return eventosRealizados
+      .filter((evento) => evento.tipo_evento === "abastecimento")
+      .reduce((sum, evento) => {
+        const payload = (evento.payload || {}) as Record<string, unknown>
+        return sum + Math.max(0, Number(payload.valor_total || 0))
+      }, 0)
+  }, [eventosRealizados])
+
+  const custosTotal = useMemo(
+    () => custos.reduce((sum, item) => sum + Number(item.valor || 0), 0) + custoAbastecimentoEventos,
+    [custos, custoAbastecimentoEventos],
+  )
   const receitasExtras = useMemo(() => receitas.reduce((sum, item) => sum + Number(item.valor || 0), 0), [receitas])
   const receitaFrete = Number(viagemState.valor_frete || 0)
   const receitaTotal = receitaFrete + receitasExtras
@@ -920,14 +939,39 @@ export function ViagemDetalheClient({
 
   const abastecimentosResumo = useMemo(() => {
     const abastecimentos = eventosRealizados.filter((e) => e.tipo_evento === "abastecimento")
+
+    const litros = abastecimentos.reduce((sum, evento) => {
+      const payload = (evento.payload || {}) as Record<string, unknown>
+      const litrosPayload = Number(payload.litros || 0)
+      if (litrosPayload > 0) return sum + litrosPayload
+
+      return (
+        sum +
+        Number(payload.litros_cavalo || 0) +
+        Number(payload.litros_thermo_king || 0) +
+        Number(payload.litros_arla || 0)
+      )
+    }, 0)
+
+    const custoEventos = abastecimentos.reduce((sum, evento) => {
+      const payload = (evento.payload || {}) as Record<string, unknown>
+      return sum + Math.max(0, Number(payload.valor_total || 0))
+    }, 0)
+
+    const custoDiesel = custos
+      .filter((c) => normalizeCategoria(c.categoria) === "Diesel")
+      .reduce((sum, c) => sum + Number(c.valor || 0), 0)
+
     return {
       qtd: abastecimentos.length,
-      litros: abastecimentos.reduce((sum, e) => sum + Number((e.payload as any)?.litros || 0), 0),
-      custo: custos
-        .filter((c) => normalizeCategoria(c.categoria) === "Diesel")
-        .reduce((sum, c) => sum + Number(c.valor || 0), 0),
+      litros,
+      custo: custoEventos > 0 ? custoEventos : custoDiesel,
+      custoEventos,
+      custoDiesel,
     }
   }, [custos, eventosRealizados])
+
+  const custoAbastecimentoLabel = abastecimentosResumo.custoEventos > 0 ? "Abastecimento" : "Diesel"
 
   const custosAbastecimentoPorViagemId = useMemo(() => {
     const mapa = new Map<string, number>()
@@ -1635,7 +1679,7 @@ export function ViagemDetalheClient({
       inicio: primeiroEvento.inicio,
       fim: eventoFechamento.fim !== "-" ? eventoFechamento.fim : eventoFechamento.inicio,
       duracao: `${eventosAteFechamento.length} etapa(s) compactadas`,
-      status: "Clique para expandir",
+      status: "...",
       source: null,
     }
   }, [eventosCicloTabela, fechamentoEventoIndex, fechamentoViagemLabel, viagemState.id])
@@ -3055,6 +3099,11 @@ export function ViagemDetalheClient({
       }
 
 
+    const litrosAbastecimento =
+      Number(abastecimentoForm.litros_cavalo || 0) +
+      Number(abastecimentoForm.litros_thermo_king || 0) +
+      (abastecimentoForm.abasteceu_arla === "sim" ? Number(abastecimentoForm.litros_arla || 0) : 0)
+
     const payloadAbastecimento = isAbastecimentoSelecionado
       ? {
           veiculo_id: abastecimentoForm.veiculo_id,
@@ -3068,6 +3117,7 @@ export function ViagemDetalheClient({
           horimetro: parseDecimalInput(abastecimentoForm.horimetro),
           litros_cavalo: Number(abastecimentoForm.litros_cavalo || 0),
           litros_thermo_king: Number(abastecimentoForm.litros_thermo_king || 0),
+          litros: litrosAbastecimento,
           hora_thermo_king: Number(abastecimentoForm.hora_thermo_king || 0),
           valor_total: abastecimentoResumoFinanceiro.total,
           abasteceu_arla: abastecimentoForm.abasteceu_arla,
@@ -3793,6 +3843,51 @@ export function ViagemDetalheClient({
     if (novaViagemId) {
       setNovaViagemModalOpen(false)
       setShowNovaViagemAdvanced(false)
+      setEditingViagemId(null)
+    }
+  }
+
+  const handleAtualizarViagem = async () => {
+    if (!editingViagemId) return
+    setLoading(true)
+    const rotaSelecionada = rotasCadastro.find((rota) => rota.id === novaViagemForm.rota_id)
+    const planejamentoRota = rotaSelecionada
+      ? buildPlanejamentoRotaFromForm(rotaSelecionada, novaViagemForm.data_inicio, novaViagemForm.data_fim)
+      : null
+    const { error } = await supabase.from("viagens").update({
+      cliente_id: novaViagemForm.cliente_id || null,
+      veiculo_id: novaViagemForm.veiculo_id || null,
+      motorista_id: novaViagemForm.motorista_id || null,
+      rota_id: novaViagemForm.rota_id || null,
+      origem_real: novaViagemForm.origem_real.trim() || null,
+      destino_real: novaViagemForm.destino_real.trim() || null,
+      data_inicio: novaViagemForm.data_inicio ? new Date(novaViagemForm.data_inicio).toISOString() : undefined,
+      data_fim: novaViagemForm.data_fim ? new Date(novaViagemForm.data_fim).toISOString() : null,
+      tipo_carga: novaViagemForm.tipo_carga.trim() || null,
+      volume_toneladas: novaViagemForm.volume_toneladas ? Number(novaViagemForm.volume_toneladas) : null,
+      valor_frete: novaViagemForm.valor_frete ? Number(novaViagemForm.valor_frete) : null,
+      forma_pagamento: novaViagemForm.forma_pagamento || null,
+      planejamento_rota: planejamentoRota,
+      updated_at: new Date().toISOString(),
+    }).eq("id", editingViagemId)
+    setLoading(false)
+    if (!error) {
+      setNovaViagemModalOpen(false)
+      setEditingViagemId(null)
+      setShowNovaViagemAdvanced(false)
+      await recarregarDados()
+    }
+  }
+
+  const handleExcluirViagem = async () => {
+    if (!deleteViagemId) return
+    setLoading(true)
+    const { error } = await supabase.from("viagens").delete().eq("id", deleteViagemId)
+    setLoading(false)
+    if (!error) {
+      setDeleteViagemDialogOpen(false)
+      setDeleteViagemId(null)
+      await recarregarDados()
     }
   }
 
@@ -3805,20 +3900,20 @@ export function ViagemDetalheClient({
         </Link>
       )}
 
-      <Tabs defaultValue="operacao" className="space-y-3 min-h-0">
-        <TabsList className="w-full justify-start overflow-x-auto whitespace-nowrap gap-1 rounded-xl border border-border/60 bg-muted/40 p-1.5">
-          <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="operacao">Operação</TabsTrigger>
-          <TabsTrigger className={embedded ? "px-3 text-sm" : undefined} value="kpis">KPIs</TabsTrigger>
+      <Tabs defaultValue="operacao" className="space-y-4 min-h-0">
+        <TabsList className="w-full justify-start overflow-x-auto whitespace-nowrap gap-1 rounded-xl bg-card border border-border/60 p-1 shadow-sm">
+          <TabsTrigger className="rounded-lg px-5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm" value="operacao">Operação</TabsTrigger>
+          <TabsTrigger className="rounded-lg px-5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm" value="kpis">KPIs</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="operacao" className="space-y-3 min-h-0">
-          <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
-            <div className="xl:col-span-10 flex flex-col gap-2">
-              <Card className="order-2 border-border/60 shadow-sm py-3 gap-2">
-                <CardHeader className="pb-1 px-4 gap-3">
+        <TabsContent value="operacao" className="space-y-4 min-h-0">
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-4">
+            <div className="flex flex-col gap-3 min-w-0">
+              <div className="order-2 bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                <div className="px-5 pt-4 pb-3 border-b border-border/60 bg-muted/20">
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                     <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle className="text-lg">EVENTOS DO CICLO</CardTitle>
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Eventos do Ciclo</h3>
                       <span className="text-xs font-mono text-muted-foreground border border-border/60 rounded px-2 py-0.5 bg-muted/40">
                         {viagemLabel}
                       </span>
@@ -3828,21 +3923,22 @@ export function ViagemDetalheClient({
                         </Badge>
                       )}
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 sticky top-2 z-20 bg-background/95 backdrop-blur rounded-md py-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <Button
                         type="button"
+                        size="sm"
                         variant="outline"
-                        onClick={() => {
-                          prepararNovaViagemForm()
-                          setNovaViagemModalOpen(true)
-                        }}
+                        className="h-7 text-xs gap-1.5 border-border/70"
+                        onClick={() => { prepararNovaViagemForm(); setNovaViagemModalOpen(true) }}
                         disabled={loading}
                       >
-                        {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
-                        Iniciar nova viagem
+                        {loading ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" />}
+                        Nova viagem
                       </Button>
                       <Button
                         type="button"
+                        size="sm"
+                        className="h-7 text-xs gap-1.5"
                         onClick={() => {
                           setOperacaoViagemTipo("fechar")
                           setViagemOperacaoId(subViagemAtivaId || opcoesFecharViagem[0]?.id || viagemState.id)
@@ -3850,13 +3946,14 @@ export function ViagemDetalheClient({
                         }}
                         disabled={loading || opcoesFecharViagem.length === 0}
                       >
-                        {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
                         Fechar viagem
                       </Button>
-                      {opcoesReabrirViagem.length > 0 ? (
+                      {opcoesReabrirViagem.length > 0 && (
                         <Button
                           type="button"
+                          size="sm"
                           variant="outline"
+                          className="h-7 text-xs gap-1.5 border-border/70"
                           onClick={() => {
                             setOperacaoViagemTipo("reabrir")
                             setViagemOperacaoId(opcoesReabrirViagem[0]?.id || "")
@@ -3864,33 +3961,29 @@ export function ViagemDetalheClient({
                           }}
                           disabled={loading}
                         >
-                          {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
-                          Reabrir viagem
+                          Reabrir
                         </Button>
-                      ) : null}
+                      )}
                     </div>
                   </div>
-                </CardHeader>
-                <CardContent className="pt-0 px-4">
+                </div>
+                <div className="pt-0 px-4">
                   {usingLocalEventosFallback && (
                     <p className="text-xs text-amber-600 mb-2">
                       Modo local ativo: eventos salvos no navegador até publicar a migration no Supabase.
                     </p>
                   )}
                   <div className="overflow-x-auto">
-                    <div className="flex flex-wrap items-center gap-2 mb-3">
-                      <p className="text-xs text-muted-foreground">Status na tabela: cinza = realizado, amarelo = planejado. Header da viagem: contexto operacional e consistência dos dados.</p>
-                    </div>
                     <table className="w-full min-w-[980px] text-sm">
                       <thead>
-                        <tr className="border-b text-left text-muted-foreground">
-                          <th className="py-2 pr-2">#</th>
-                          <th className="py-2 pr-2">Tipo</th>
-                          <th className="py-2 pr-2">Local</th>
-                          <th className="py-2 pr-2">Início</th>
-                          <th className="py-2 pr-2">Fim</th>
-                          <th className="py-2 pr-2">Duração</th>
-                          <th className="py-2">Status</th>
+                        <tr className="border-b border-border/60 bg-muted/30">
+                          <th className="h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-left w-12">#</th>
+                          <th className="h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-left">Tipo</th>
+                          <th className="h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-left">Local</th>
+                          <th className="h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-left">Início</th>
+                          <th className="h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-left">Fim</th>
+                          <th className="h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-left">Duração</th>
+                          <th className="h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground text-left">Status</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3902,101 +3995,79 @@ export function ViagemDetalheClient({
                           </tr>
                         )}
                         {eventosVisiveisAgrupados.map((grupo) => (
-                          <>
-                            {/* Header de Viagem */}
+                          <Fragment key={`grupo-${grupo.viagemId}`}>
+                            {/* Header de Viagem — redesenhado */}
                             <tr
                               key={`header-${grupo.viagemId}`}
-                              className={`${grupo.temFechamento ? "bg-red-100/40" : "bg-blue-100/40"} border-b-2 border-border cursor-pointer hover:bg-blue-100/60`}
+                              className="border-b border-border/60 cursor-pointer group"
+                              style={{ background: grupo.temFechamento ? "oklch(0.97 0.005 15)" : "oklch(0.97 0.005 265)" }}
                               onClick={() => {
                                 const primeiroEventoEditavel = grupo.eventosViagem.find((item) => item.kind !== "resumo_fechamento" && item.source)?.source || null
-
-                                if (primeiroEventoEditavel) {
-                                  abrirEventoNaModalAcoesRapidas(primeiroEventoEditavel)
-                                  return
-                                }
-
+                                if (primeiroEventoEditavel) { abrirEventoNaModalAcoesRapidas(primeiroEventoEditavel); return }
                                 const newExpanded = new Set(expandedViagensIds)
-                                if (newExpanded.has(grupo.viagemId)) {
-                                  newExpanded.delete(grupo.viagemId)
-                                } else {
-                                  newExpanded.add(grupo.viagemId)
-                                }
+                                if (newExpanded.has(grupo.viagemId)) { newExpanded.delete(grupo.viagemId) } else { newExpanded.add(grupo.viagemId) }
                                 setExpandedViagensIds(newExpanded)
                               }}
                             >
-                              <td colSpan={7} className="py-2 px-4">
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div className="flex items-center gap-3 flex-wrap">
-                                      <span className="font-semibold text-sm">Viagem {grupo.sequencia}</span>
-                                      <Badge variant="secondary" className="text-[10px] tracking-wide">
-                                        ID {grupo.viagemId.slice(0, 8).toUpperCase()}
-                                      </Badge>
-                                      <Badge variant="outline" className="text-[10px]">
-                                        {grupo.viagem?.veiculo?.placa_cavalo || "Sem veículo"}
-                                      </Badge>
-                                      <Badge variant="outline" className="text-[10px]">
-                                        {grupo.viagem?.motorista?.nome || "Sem motorista"}
-                                      </Badge>
-                                      <Badge variant="outline" className="text-[10px]">
-                                        Frete: {typeof grupo.viagem?.valor_frete === "number" && Number.isFinite(grupo.viagem.valor_frete)
-                                          ? formatCurrency(grupo.viagem.valor_frete)
-                                          : "A definir"}
-                                      </Badge>
-                                    </div>
+                              <td colSpan={7} className="py-0">
+                                <div className={`flex flex-col px-3 py-2 border-l-4 transition-colors group-hover:bg-primary/5 ${grupo.temFechamento ? "border-l-slate-400" : "border-l-primary"}`}>
+                                  {/* Linha 1: Status + Título + Rota + Expandir */}
+                                  <div className="flex items-center gap-2">
+                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide shrink-0 ${grupo.temFechamento ? "bg-slate-100 text-slate-600" : "bg-primary/10 text-primary"}`}>
+                                      {grupo.temFechamento ? "FECHADA" : "ABERTA"}
+                                    </span>
+                                    <span className="font-bold text-sm text-foreground shrink-0">Viagem {grupo.sequencia}</span>
+                                    <span className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground flex-1 min-w-0 truncate">
+                                      <Route className="size-3 shrink-0 text-muted-foreground/60" />
+                                      <span className="truncate">{grupo.origem} → {grupo.destino}</span>
+                                    </span>
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      onClick={(event) => {
-                                        event.stopPropagation()
+                                      className="h-6 w-6 p-0 ml-auto text-muted-foreground hover:text-foreground shrink-0"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
                                         const newExpanded = new Set(expandedViagensIds)
-                                        if (newExpanded.has(grupo.viagemId)) {
-                                          newExpanded.delete(grupo.viagemId)
-                                        } else {
-                                          newExpanded.add(grupo.viagemId)
-                                        }
+                                        if (newExpanded.has(grupo.viagemId)) { newExpanded.delete(grupo.viagemId) } else { newExpanded.add(grupo.viagemId) }
                                         setExpandedViagensIds(newExpanded)
                                       }}
-                                      className="text-xs"
                                     >
-                                      {expandedViagensIds.has(grupo.viagemId) ? "Contrair" : "Expandir"}
+                                      <span className="text-xs">{expandedViagensIds.has(grupo.viagemId) ? "▲" : "▼"}</span>
                                     </Button>
                                   </div>
-
-                                  <div className="flex items-center gap-3 flex-wrap">
-                                    <Badge variant={grupo.temFechamento ? "destructive" : "default"} className="text-xs">
-                                      {grupo.temFechamento ? "Fechada" : "Aberta"}
-                                    </Badge>
-                                    <span className="text-xs text-muted-foreground">
-                                      {grupo.eventosReais} realizado(s) • {grupo.eventosPlanejados} planejado(s)
+                                  {/* Linha 2: Chips informativos */}
+                                  <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
+                                    {/* Veículo */}
+                                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-mono border ${grupo.viagem?.veiculo?.placa_cavalo ? "bg-background/80 border-border/50 text-foreground" : "bg-muted/30 border-border/40 text-muted-foreground"}`}>
+                                      {grupo.viagem?.veiculo?.placa_cavalo || "Sem veículo"}
                                     </span>
-                                    <Badge variant="outline" className="text-[10px]">
+                                    {/* Motorista */}
+                                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] border ${grupo.viagem?.motorista?.nome ? "bg-background/80 border-border/50 text-foreground" : "bg-muted/30 border-border/40 text-muted-foreground"}`}>
+                                      {grupo.viagem?.motorista?.nome?.split(" ")[0] || "Sem motorista"}
+                                    </span>
+                                    {/* Frete */}
+                                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] border ${grupo.viagem?.valor_frete ? "bg-emerald-50 border-emerald-200/60 text-emerald-700" : "bg-muted/30 border-border/40 text-muted-foreground"}`}>
+                                      Frete: {grupo.viagem?.valor_frete ? formatCurrency(grupo.viagem.valor_frete) : "A definir"}
+                                    </span>
+                                    <span className="text-border/60 text-xs">·</span>
+                                    {/* Abastecimento */}
+                                    <span className="inline-flex items-center rounded px-2 py-0.5 text-[11px] border bg-amber-50 border-amber-200/60 text-amber-700">
                                       Abast: {formatCurrency(custosAbastecimentoPorViagemId.get(grupo.viagemId) || 0)}
-                                    </Badge>
-                                    <Badge variant="outline" className="text-[10px]">
+                                    </span>
+                                    {/* Manutenção */}
+                                    <span className="inline-flex items-center rounded px-2 py-0.5 text-[11px] border bg-red-50/70 border-red-200/60 text-red-700">
                                       Manut: {formatCurrency(custosManutencaoPorViagemId.get(grupo.viagemId) || 0)}
-                                    </Badge>
-                                    <Badge variant="outline" className="text-[10px] font-medium">
-                                      Custo: {formatCurrency((custosAbastecimentoPorViagemId.get(grupo.viagemId) || 0) + (custosManutencaoPorViagemId.get(grupo.viagemId) || 0))}
-                                    </Badge>
-                                    <span className="text-xs text-muted-foreground">{grupo.fechamentoMotivo}</span>
-                                    {grupo.contagem === 0 ? <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-700">Sem eventos</Badge> : null}
-                                    {grupo.temFechamento && !grupo.viagem?.fechamento_evento_id ? <Badge variant="outline" className="text-[10px] border-red-500 text-red-700">Sem fechamento_evento</Badge> : null}
-                                  </div>
-
-                                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2 text-xs text-muted-foreground">
-                                    <div className="rounded-md border border-border/60 bg-background/70 px-2 py-1">
-                                      <span className="font-medium text-foreground">Rota:</span> {grupo.origem} → {grupo.destino}
-                                    </div>
-                                    <div className="rounded-md border border-border/60 bg-background/70 px-2 py-1">
-                                      <span className="font-medium text-foreground">Último evento:</span> {grupo.ultimoEvento?.tipo || "-"} • {grupo.ultimoEvento?.source?.ocorrido_em ? formatDateTime(grupo.ultimoEvento.source.ocorrido_em) : "-"}
-                                    </div>
-                                    <div className="rounded-md border border-border/60 bg-background/70 px-2 py-1">
-                                      <span className="font-medium text-foreground">Sem atualização:</span> {grupo.tempoSemAtualizacaoMin === null ? "-" : formatDurationByUnit(grupo.tempoSemAtualizacaoMin)}
-                                    </div>
-                                    <div className="rounded-md border border-border/60 bg-background/70 px-2 py-1">
-                                      <span className="font-medium text-foreground">Início/Fim:</span> {formatDateTime(grupo.inicioViagem)} • {formatDateTime(grupo.fimViagem)} {grupo.duracaoMin !== null ? `(${formatDurationByUnit(grupo.duracaoMin)})` : ""}
-                                    </div>
+                                    </span>
+                                    {/* Custo total */}
+                                    {(() => {
+                                      const total = (custosAbastecimentoPorViagemId.get(grupo.viagemId) || 0) + (custosManutencaoPorViagemId.get(grupo.viagemId) || 0)
+                                      return (
+                                        <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-semibold border ${total > 0 ? "bg-red-50 border-red-200/60 text-red-700" : "bg-muted/40 border-border/50 text-muted-foreground"}`}>
+                                          Custo: {formatCurrency(total)}
+                                        </span>
+                                      )
+                                    })()}
+                                    <span className="text-[11px] text-muted-foreground ml-1">{grupo.eventosReais} ev.</span>
                                   </div>
                                 </div>
                               </td>
@@ -4024,61 +4095,97 @@ export function ViagemDetalheClient({
                                     abrirEventoNaModalAcoesRapidas(evento.source)
                                   }}
                                 >
-                                  <td className="py-2 pr-2">{evento.ordem}</td>
-                                  <td className="py-2 pr-2">{evento.tipo}</td>
-                                  <td className="py-2 pr-2">{evento.local}</td>
-                                  <td className="py-2 pr-2">{evento.inicio}</td>
-                                  <td className="py-2 pr-2">{evento.fim}</td>
-                                  <td className="py-2 pr-2">{evento.duracao}</td>
-                                  <td className="py-2">{evento.status}</td>
+                                  <td className="px-3 py-2.5 text-[11px] text-muted-foreground tabular-nums w-8">{evento.ordem}</td>
+                                  <td className="px-3 py-2.5">
+                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${
+                                      evento.tipo === "Saída" ? "bg-blue-100 text-blue-800" :
+                                      evento.tipo === "Chegada" ? "bg-emerald-100 text-emerald-800" :
+                                      evento.tipo === "Abastecimento" ? "bg-amber-100 text-amber-800" :
+                                      evento.tipo === "Parada" ? "bg-orange-100 text-orange-800" :
+                                      evento.tipo === "Manutenção" ? "bg-red-100 text-red-800" :
+                                      evento.tipo === "Pedágio" ? "bg-purple-100 text-purple-800" :
+                                      evento.tipo === "Ocorrência" ? "bg-rose-100 text-rose-800" :
+                                      "bg-muted/60 text-muted-foreground"
+                                    }`}>{evento.tipo}</span>
+                                  </td>
+                                  <td className="px-3 py-2.5 text-xs text-muted-foreground max-w-[160px] truncate">{evento.local}</td>
+                                  <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{evento.inicio}</td>
+                                  <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{evento.fim}</td>
+                                  <td className="px-3 py-2.5 text-xs text-muted-foreground">{evento.duracao}</td>
+                                  <td className="px-3 py-2.5 text-[11px]">
+                                    <span className={`inline-flex items-center gap-1 ${
+                                      evento.status.includes("✅") ? "text-emerald-700" :
+                                      evento.status.includes("🟡") ? "text-amber-700" :
+                                      evento.status.includes("🔴") ? "text-red-700" :
+                                      "text-muted-foreground"
+                                    }`}>{evento.status}</span>
+                                  </td>
                                 </tr>
                               ))
                             ) : null}
-                          </>
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
 
               <div className="order-1 grid grid-cols-1 gap-2">
                 <div className="space-y-3">
-                  <Card className="sticky top-2 z-10 border-border/60 bg-background/95 shadow-sm backdrop-blur py-1 gap-1">
-                    <CardContent className="p-2.5 sm:p-2.5 space-y-1.5">
-                      {/* Cabeçalho com título + badges de estado */}
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-lg font-bold tracking-tight">CICLO TRANSLOG</h2>
-                        {subViagemAtivaId && (
-                          <Badge className="bg-blue-100 text-blue-800 border-blue-200">
-                            Sub-viagem ativa
-                          </Badge>
-                        )}
-                        {subViagensCarregadas.length > 0 && !subViagemAtivaId && (
-                          <Badge className="bg-amber-100 text-amber-800 border-amber-200">
-                            {subViagensCarregadas.length} sub-viagem(s)
-                          </Badge>
-                        )}
-                        {cicloFechado && <Badge className="bg-red-100 text-red-800 border-red-200">Ciclo fechado</Badge>}
+                  <div className="sticky top-2 z-10 bg-card border border-border/60 rounded-xl shadow-sm overflow-hidden">
+                    {/* Gradient header strip */}
+                    <div className="bg-gradient-to-r from-primary/10 via-primary/5 to-transparent px-4 py-2.5 border-b border-border/50">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-xs font-bold tracking-widest uppercase text-primary">Ciclo Operacional</h2>
+                          {subViagemAtivaId && <Badge className="bg-blue-100 text-blue-800 border-blue-200 text-[10px]">Sub-viagem ativa</Badge>}
+                          {subViagensCarregadas.length > 0 && !subViagemAtivaId && (
+                            <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-[10px]">{subViagensCarregadas.length} sub-viagem(s)</Badge>
+                          )}
+                          {cicloFechado && <Badge className="bg-red-100 text-red-800 border-red-200 text-[10px]">Ciclo fechado</Badge>}
+                        </div>
+                        {/* KPI chips inline */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 text-[11px] text-emerald-700">
+                            <span className="font-normal opacity-60">Receita</span>
+                            <span className="font-bold">{formatCurrency(receitaTotal)}</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 border border-red-200/70 px-2.5 py-0.5 text-[11px] text-red-700">
+                            <span className="font-normal opacity-60">Custo</span>
+                            <span className="font-bold">-{formatCurrency(custosTotal)}</span>
+                          </span>
+                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] ${lucro >= 0 ? "bg-emerald-50 border-emerald-200/70 text-emerald-700" : "bg-red-50 border-red-200/70 text-red-700"}`}>
+                            <span className="font-normal opacity-60">Margem</span>
+                            <span className="font-bold">{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</span>
+                          </span>
+                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] ${healthScore >= 70 ? "bg-emerald-50 border-emerald-200/70 text-emerald-700" : healthScore >= 40 ? "bg-amber-50 border-amber-200/70 text-amber-700" : "bg-red-50 border-red-200/70 text-red-700"}`}>
+                            <span className="font-normal opacity-60">Health</span>
+                            <span className="font-bold">{healthScore}</span>
+                          </span>
+                        </div>
                       </div>
+                    </div>
 
+                    {/* Body */}
+                    <div className="px-4 py-3 space-y-3">
                       {/* Progresso da rota */}
                       {kmPlanejado > 0 && (
                         <div>
                           <div className="flex items-center justify-between mb-1 text-xs text-muted-foreground">
-                            <span>{origemOperacionalLabel}</span>
-                            <span className="font-semibold text-foreground">{progressoRotaPercent.toFixed(0)}%</span>
-                            <span>{destinoOperacionalLabel}</span>
+                            <span className="truncate max-w-[40%]">{origemOperacionalLabel}</span>
+                            <span className="font-bold text-foreground tabular-nums">{progressoRotaPercent.toFixed(0)}%</span>
+                            <span className="truncate max-w-[40%] text-right">{destinoOperacionalLabel}</span>
                           </div>
-                          <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div className="h-2 rounded-full bg-muted overflow-hidden">
                             <div
                               className={`h-full rounded-full transition-all duration-500 ${
-                                progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-blue-500" : "bg-slate-400"
+                                progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-primary" : "bg-muted-foreground/40"
                               }`}
                               style={{ width: `${progressoRotaPercent}%` }}
                             />
                           </div>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                          <p className="text-[10px] text-muted-foreground mt-1">
                             {kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km` : "0 km"} percorridos
                             {kmRestanteAutomatico > 0 ? ` · ${kmRestanteAutomatico.toLocaleString("pt-BR")} km restantes` : ""}
                           </p>
@@ -4086,29 +4193,22 @@ export function ViagemDetalheClient({
                       )}
 
                       {subViagemAtivaId && (
-                        <p className="text-xs text-muted-foreground">
-                          <Button
-                            variant="link"
-                            size="sm"
-                            className="h-auto p-0 text-xs"
-                            onClick={() => setSubViagemAtivaId(null)}
-                          >
-                            ← Voltar para viagem principal
-                          </Button>
-                        </p>
+                        <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setSubViagemAtivaId(null)}>
+                          ← Voltar para viagem principal
+                        </Button>
                       )}
 
-                      {/* Dados operacionais em grade compacta */}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-0 text-xs sm:text-sm">
-                        <p className="text-muted-foreground">Ciclo: <span className="font-medium text-foreground">{cicloLabel}</span></p>
-                        <p className="text-muted-foreground">Veículo: <span className="font-medium text-foreground">{veiculoAtual?.placa_cavalo || "A DEFINIR"}</span></p>
-                        <p className="text-muted-foreground">Motorista: <span className="font-medium text-foreground">{motoristaAtual?.nome || "A DEFINIR"}</span></p>
-                        <p className="text-muted-foreground col-span-2 sm:col-span-1">ID ciclo: <span className="font-medium text-foreground text-xs">{cicloIdReferencia}</span></p>
-                        <p className="text-muted-foreground">Docs: <span className="font-medium text-foreground">{documentos.length}</span></p>
+                      {/* Dados operacionais */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-xs">
+                        <p className="text-muted-foreground">Ciclo: <span className="font-semibold text-foreground">{cicloLabel}</span></p>
+                        <p className="text-muted-foreground">Veículo: <span className="font-semibold text-foreground">{veiculoAtual?.placa_cavalo || "A DEFINIR"}</span></p>
+                        <p className="text-muted-foreground">Motorista: <span className="font-semibold text-foreground">{motoristaAtual?.nome || "A DEFINIR"}</span></p>
+                        <p className="text-muted-foreground col-span-2 sm:col-span-1 truncate">ID: <span className="font-semibold text-foreground font-mono">{cicloIdReferencia}</span></p>
+                        <p className="text-muted-foreground">Docs: <span className="font-semibold text-foreground">{documentos.length}</span></p>
                       </div>
 
-                      {/* Marco atual + próximo */}
-                      <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 space-y-0">
+                      {/* Marco atual */}
+                      <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 space-y-1">
                         <p className="text-xs text-muted-foreground">
                           <span className="font-semibold text-foreground">Marco atual:</span>{" "}
                           {ultimoMarco ? `${eventTypeLabels[ultimoMarco.tipo_evento]} · ${ultimoMarco.local || "A DEFINIR"} · ${formatDateTime(ultimoMarco.ocorrido_em)}` : "Nenhum evento registrado"}
@@ -4123,32 +4223,35 @@ export function ViagemDetalheClient({
                           {formatDateTime(previsaoChegadaDestino)}
                         </p>
                       </div>
-
-                    </CardContent>
-                  </Card>
+                    </div>
+                  </div>
 
                   {/* ALERTAS com severidade */}
-                  <Card className="border-border/60 shadow-sm py-2 gap-1">
-                    <CardHeader className="pb-1 px-3">
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg">ALERTAS / PENDÊNCIAS</CardTitle>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-1 pt-0 px-3">
+                  <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between">
+                      <p className="text-xs font-bold tracking-widest uppercase text-muted-foreground">Alertas / Pendências</p>
+                      {pendenciasCockpit.length > 0 && (
+                        <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 rounded-full px-2 py-0.5">{pendenciasCockpit.length}</span>
+                      )}
+                    </div>
+                    <div className="px-3 py-2 space-y-1">
+                      {pendenciasCockpit.length === 0 && (
+                        <p className="text-xs text-muted-foreground py-2 text-center">Sem pendências</p>
+                      )}
                       {pendenciasCockpit.map((item) => {
                         const isCritical = item.toLowerCase().includes("insuficiente") || item.toLowerCase().includes("atraso estimado")
                         const isWarning = item.toLowerCase().includes("elevado") || item.toLowerCase().includes("pendente")
                         return (
-                          <div key={item} className={`flex items-start gap-2 rounded-md px-2 py-1 text-sm ${
-                            isCritical ? "bg-red-50 text-red-800" : isWarning ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-700"
+                          <div key={item} className={`flex items-start gap-2 rounded-md border-l-2 px-3 py-1.5 text-xs ${
+                            isCritical ? "border-red-400 bg-red-50 text-red-800" : isWarning ? "border-amber-400 bg-amber-50 text-amber-800" : "border-muted-foreground/30 bg-muted/30 text-muted-foreground"
                           }`}>
-                            <TriangleAlert className={`size-4 mt-0.5 shrink-0 ${isCritical ? "text-red-500" : isWarning ? "text-amber-500" : "text-slate-400"}`} />
+                            <TriangleAlert className={`size-3.5 mt-0.5 shrink-0 ${isCritical ? "text-red-500" : isWarning ? "text-amber-500" : "text-muted-foreground/50"}`} />
                             <span className="leading-snug">{item}</span>
                           </div>
                         )
                       })}
-                    </CardContent>
-                  </Card>
+                    </div>
+                  </div>
                 </div>
 
                 {/* KPIs movidos para a coluna da direita */}
@@ -4277,7 +4380,7 @@ export function ViagemDetalheClient({
                       <CardContent className="p-3">
                         <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Custo acum.</p>
                         <p className="text-lg font-bold text-red-700">{formatCurrency(custosTotal)}</p>
-                        <p className="text-[11px] text-muted-foreground">Diesel: {formatCurrency(abastecimentosResumo.custo)}</p>
+                        <p className="text-[11px] text-muted-foreground">{custoAbastecimentoLabel}: {formatCurrency(abastecimentosResumo.custo)}</p>
                       </CardContent>
                     </Card>
                     {/* Margem */}
@@ -4307,76 +4410,81 @@ export function ViagemDetalheClient({
 
             </div>
 
-            <div className="space-y-2 xl:col-span-2 xl:max-w-[320px] xl:sticky xl:top-2 xl:self-start">
-              {/* Indicadores compactos no canto direito */}
-              <Card className="border-border/60 shadow-sm py-2 gap-1">
-                <CardContent className="p-2 sm:p-2.5 space-y-2">
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Financeiro</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Receita</p>
-                      <p className="text-sm sm:text-base font-bold text-emerald-700 leading-tight break-all">{formatCurrency(receitaTotal)}</p>
+            <div className="space-y-3 xl:sticky xl:top-2 xl:self-start">
+              {/* Financeiro */}
+              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                <div className="px-3 py-2 border-b border-border/50">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Financeiro</p>
+                </div>
+                <div className="p-3 grid grid-cols-2 gap-2">
+                  <div className="rounded-lg border-l-2 border-emerald-400 bg-emerald-50/60 px-2.5 py-2">
+                    <p className="text-[10px] text-muted-foreground">Receita</p>
+                    <p className="text-sm font-bold text-emerald-700 leading-tight">{formatCurrency(receitaTotal)}</p>
+                  </div>
+                  <div className="rounded-lg border-l-2 border-red-400 bg-red-50/60 px-2.5 py-2">
+                    <p className="text-[10px] text-muted-foreground">Custo</p>
+                    <p className="text-sm font-bold text-red-700 leading-tight">{formatCurrency(custosTotal)}</p>
+                  </div>
+                  <div className={`rounded-lg border-l-2 px-2.5 py-2 ${lucro >= 0 ? "border-emerald-400 bg-emerald-50/60" : "border-red-400 bg-red-50/60"}`}>
+                    <p className="text-[10px] text-muted-foreground">Margem</p>
+                    <p className={`text-sm font-bold leading-tight ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</p>
+                  </div>
+                  <div className="rounded-lg border-l-2 border-border bg-muted/30 px-2.5 py-2">
+                    <p className="text-[10px] text-muted-foreground">R$/km</p>
+                    <p className="text-sm font-bold leading-tight">{custoPorKm > 0 ? formatCurrency(custoPorKm) : "—"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Abastecimento */}
+              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                <div className="px-3 py-2 border-b border-border/50">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Abastecimento</p>
+                </div>
+                <div className="p-3 grid grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-border/60 px-2.5 py-2">
+                    <p className="text-[10px] text-muted-foreground">km/L</p>
+                    <p className="text-sm font-bold leading-tight">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)}` : "—"}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 px-2.5 py-2">
+                    <p className="text-[10px] text-muted-foreground">Litros</p>
+                    <p className="text-sm font-bold leading-tight">{abastecimentosResumo.litros > 0 ? `${abastecimentosResumo.litros.toFixed(0)} L` : "—"}</p>
+                  </div>
+                  <div className="col-span-2 rounded-lg border-l-2 border-red-400 bg-red-50/60 px-2.5 py-2">
+                    <p className="text-[10px] text-muted-foreground">Valor abastecido</p>
+                    <p className="text-sm font-bold text-red-700 leading-tight">{abastecimentosResumo.custo > 0 ? formatCurrency(abastecimentosResumo.custo) : "—"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Performance */}
+              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                <div className="px-3 py-2 border-b border-border/50">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Performance</p>
+                </div>
+                <div className="p-3 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-[10px] text-muted-foreground">Progresso da rota</p>
+                      <span className="text-xs font-bold text-foreground tabular-nums">{progressoRotaPercent.toFixed(0)}%</span>
                     </div>
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Custo</p>
-                      <p className="text-sm sm:text-base font-bold text-red-700 leading-tight break-all">{formatCurrency(custosTotal)}</p>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${progressoRotaPercent >= 80 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${progressoRotaPercent}%` }} />
                     </div>
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Margem</p>
-                      <p className={`text-sm sm:text-base font-bold leading-tight ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</p>
-                    </div>
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">R$/km</p>
-                      <p className="text-sm sm:text-base font-bold leading-tight break-words">{custoPorKm > 0 ? formatCurrency(custoPorKm) : "-"}</p>
+                    <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+                      <span>{kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km` : "0 km"}</span>
+                      <span>{kmRestanteAutomatico > 0 ? `${kmRestanteAutomatico.toLocaleString("pt-BR")} km rest.` : ""}</span>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
 
-              <Card className="border-border/60 shadow-sm py-2 gap-1">
-                <CardContent className="p-2 sm:p-2.5 space-y-2">
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Abastecimento</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Consumo km/L</p>
-                      <p className="text-sm sm:text-base font-bold leading-tight break-words">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)} km/L` : "-"}</p>
-                    </div>
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Litros abastecidos</p>
-                      <p className="text-sm sm:text-base font-bold leading-tight break-words">{abastecimentosResumo.litros > 0 ? `${abastecimentosResumo.litros.toFixed(2)} L` : "-"}</p>
-                    </div>
-                    <div className="sm:col-span-2 rounded-lg border border-border/60 p-2">
-                      <p className="text-[10px] text-muted-foreground">Valor total abastecido</p>
-                      <p className="text-sm sm:text-base font-bold text-red-700 leading-tight break-all">{abastecimentosResumo.custo > 0 ? formatCurrency(abastecimentosResumo.custo) : "-"}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border-border/60 shadow-sm py-2 gap-1">
-                <CardContent className="p-2 sm:p-2.5 space-y-2">
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Performance</p>
-                  <div className="grid grid-cols-1 gap-2">
-                    <div className="rounded-lg border border-border/60 p-2">
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="text-[10px] text-muted-foreground">Progresso da rota</p>
-                        <span className="text-[11px] font-semibold">{progressoRotaPercent.toFixed(0)}%</span>
-                      </div>
-                      <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${progressoRotaPercent}%` }} />
-                      </div>
-                      <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                        <span>{kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km percorridos` : "0 km percorridos"}</span>
-                        <span>{kmRestanteAutomatico > 0 ? `${kmRestanteAutomatico.toLocaleString("pt-BR")} km restantes` : "0 km restantes"}</span>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border-border/60 shadow-sm">
-                <CardHeader className="pb-1"><CardTitle className="text-lg">Ações rápidas</CardTitle></CardHeader>
-                <CardContent className="space-y-2 pt-0 pb-3">
+              {/* Ações rápidas */}
+              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                <div className="px-3 py-2.5 border-b border-border/50">
+                  <p className="text-xs font-semibold text-foreground">Ações rápidas</p>
+                </div>
+                <div className="p-3 space-y-2">
                   <div className="grid gap-1">
                     <Label>Viagem dos registros</Label>
                     <Select
@@ -4403,11 +4511,9 @@ export function ViagemDetalheClient({
                       </SelectContent>
                     </Select>
                   </div>
-                  {/* NOVO: Botão único para abrir modal de ações rápidas */}
                   <Button
                     type="button"
-                    variant="outline"
-                    className="w-full justify-start font-semibold"
+                    className="w-full gradient-primary font-semibold text-sm shadow-sm"
                     onClick={() => {
                       setQuickActionsModalOpen(true)
                       setQuickActionStep('list')
@@ -4418,7 +4524,8 @@ export function ViagemDetalheClient({
                     }}
                     disabled={loading || !temViagemAbertaParaRegistro}
                   >
-                    Ações rápidas
+                    {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                    Registrar evento
                   </Button>
 
                   {/* Modal de ações rápidas em estilo wizard/tab horizontal */}
@@ -4430,209 +4537,215 @@ export function ViagemDetalheClient({
                       setDocumentacaoQuickActionPreview('')
                     }
                   }}>
-                    <DialogContent className={`!gap-0 overflow-hidden border-border/60 bg-gradient-to-br from-background via-background to-slate-50 !p-0 shadow-2xl ${activeTimelineEvent ? "ring-2 ring-amber-300/80" : ""}`} style={{ maxWidth: '1280px', width: '96%', height: '84vh', display: 'flex', flexDirection: 'column' }}>
+                    <DialogContent className={`!gap-0 overflow-hidden border-0 !p-0 shadow-2xl ${activeTimelineEvent ? "ring-2 ring-amber-400/60" : ""}`} style={{ maxWidth: '1280px', width: '96%', height: '84vh', display: 'flex', flexDirection: 'column', background: 'var(--background)' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-                        <DialogHeader className="shrink-0 border-b border-border/60 bg-gradient-to-r from-slate-50 via-background to-slate-100 px-6 pb-3 pt-5">
+                        {/* Header premium — gradient escuro */}
+                        <DialogHeader className="shrink-0 border-b border-border/40" style={{ background: 'linear-gradient(135deg, oklch(0.13 0.045 265) 0%, oklch(0.18 0.04 260) 100%)', padding: '1.25rem 1.5rem 1rem' }}>
                           <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div className="space-y-1">
+                            <div className="space-y-0.5">
                               <div className="flex flex-wrap items-center gap-2">
-                                <DialogTitle className="text-2xl font-bold tracking-tight">Ações rápidas</DialogTitle>
-                                {activeTimelineEvent ? (
-                                  <Badge className="bg-amber-100 text-amber-800 border-amber-200">Modo edição</Badge>
-                                ) : null}
+                                <DialogTitle className="text-xl font-bold tracking-tight text-white">Lançamento Operacional</DialogTitle>
+                                {activeTimelineEvent && (
+                                  <span className="inline-flex items-center rounded-full bg-amber-400/20 border border-amber-400/40 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">Modo edição</span>
+                                )}
                               </div>
-                              {activeTimelineEvent ? (
-                                <p className="text-sm text-muted-foreground">
-                                  Editando evento da {opcoesViagemRegistros.find((item) => item.id === activeTimelineEvent.viagem_id)?.sequencia
-                                    ? `Viagem ${opcoesViagemRegistros.find((item) => item.id === activeTimelineEvent.viagem_id)?.sequencia}`
-                                    : "viagem selecionada"}
-                                </p>
-                              ) : (
-                                <p className="text-sm text-muted-foreground">Novo lançamento rápido para a viagem selecionada.</p>
-                              )}
+                              <p className="text-xs text-white/50">
+                                {activeTimelineEvent
+                                  ? `Editando evento · Viagem ${opcoesViagemRegistros.find((item) => item.id === activeTimelineEvent.viagem_id)?.sequencia ?? "—"}`
+                                  : "Selecione o tipo de evento e preencha os dados"}
+                              </p>
                             </div>
-                            <div className="rounded-2xl border border-primary/15 bg-primary/5 px-4 py-2 text-right">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary/70">Viagem ativa</p>
-                              <p className="text-sm font-semibold text-foreground">
-                                {viagemAtivaNoModalSequencia
-                                  ? `Viagem ${viagemAtivaNoModalSequencia}`
-                                  : "Selecione uma viagem"}
+                            <div className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-right backdrop-blur">
+                              <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">Viagem ativa</p>
+                              <p className="text-sm font-bold text-white">
+                                {viagemAtivaNoModalSequencia ? `Viagem ${viagemAtivaNoModalSequencia}` : "—"}
                               </p>
                             </div>
                           </div>
                         </DialogHeader>
-                        {/* Abas fixas no topo */}
-                        <div className="shrink-0 border-b border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
-                          <div className="flex justify-center gap-2 overflow-x-auto rounded-2xl bg-slate-100/80 p-1.5 text-sm font-semibold shadow-inner">
-                          {smartQuickActions.map(({ label, action }) => (
-                            <button
-                              key={action.title}
-                              type="button"
-                              className={`rounded-xl px-4 py-2 transition-all whitespace-nowrap text-sm ${selectedQuickAction?.title === action.title ? 'bg-background text-primary font-bold shadow-sm ring-1 ring-primary/15' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                              onClick={() => setSelectedQuickAction(action)}
-                              disabled={loading || !temViagemAbertaParaRegistro}
-                            >
-                              {label}
-                            </button>
-                          ))}
+                        {/* Abas com ícones */}
+                        <div className="shrink-0 border-b border-border/60 bg-card/80 px-5 py-0 backdrop-blur">
+                          <div className="flex gap-0 overflow-x-auto">
+                          {smartQuickActions.map(({ label, action }) => {
+                            const isActive = selectedQuickAction?.title === action.title
+                            const iconMap: Record<string, React.ReactNode> = {
+                              "Partida/Chegada": <ArrowRightLeft className="size-4" />,
+                              "Parada":          <MapPin className="size-4" />,
+                              "Abastecimento":   <Fuel className="size-4" />,
+                              "Manutenção":      <Wrench className="size-4" />,
+                              "Documentação":    <FileText className="size-4" />,
+                            }
+                            const colorMap: Record<string, string> = {
+                              "Partida/Chegada": "text-blue-600 border-blue-500",
+                              "Parada":          "text-orange-600 border-orange-500",
+                              "Abastecimento":   "text-amber-600 border-amber-500",
+                              "Manutenção":      "text-red-600 border-red-500",
+                              "Documentação":    "text-violet-600 border-violet-500",
+                            }
+                            return (
+                              <button
+                                key={action.title}
+                                type="button"
+                                className={`flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${
+                                  isActive
+                                    ? `${colorMap[label] || "text-primary border-primary"} bg-primary/5`
+                                    : "text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/30"
+                                }`}
+                                onClick={() => setSelectedQuickAction(action)}
+                                disabled={loading || !temViagemAbertaParaRegistro}
+                              >
+                                <span className={isActive ? (colorMap[label]?.split(" ")[0] || "text-primary") : "text-muted-foreground"}>
+                                  {iconMap[label]}
+                                </span>
+                                {label}
+                              </button>
+                            )
+                          })}
                           </div>
                         </div>
                         {/* Corpo do formulário com rolagem interna */}
                         <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
                           <div style={{ width: '100%', maxWidth: '1020px', margin: '0 auto' }}>
                             {selectedQuickAction && selectedQuickAction.type === 'abastecimento' && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div className="md:col-span-2 border-b pb-2 mb-2">
-                                  <h3 className="text-xs font-bold text-primary">1. CONTEXTO NO CLIENTE</h3>
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Data/Hora chegada cliente</Label>
-                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.chegada_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Data/Hora partida cliente</Label>
-                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.partida_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
-                                </div>
-
-                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">2. Data e hora do evento</h3>
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Data/Hora Início *</Label>
-                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.inicio_em} onChange={e => setAbastecimentoForm(f => ({ ...f, inicio_em: e.target.value }))} required />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Data/Hora Fim</Label>
-                                  <Input type="datetime-local" className="text-sm" value={abastecimentoForm.fim_em} onChange={e => setAbastecimentoForm(f => ({ ...f, fim_em: e.target.value }))} />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Local (cidade/posto) *</Label>
-                                  <Input className="text-sm" value={abastecimentoForm.local} onChange={e => setAbastecimentoForm(f => ({ ...f, local: e.target.value }))} placeholder="Ex: Aurora/PA" required />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Motorista</Label>
-                                  <Select value={abastecimentoForm.motorista} onValueChange={v => setAbastecimentoForm(f => ({ ...f, motorista: v }))}>
-                                    <SelectTrigger className="text-sm">
-                                      <SelectValue placeholder="Selecione um motorista" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="">Nenhum</SelectItem>
-                                      {motoristasCadastro.map((m) => (
-                                        <SelectItem key={m.id} value={m.nome || ""}>{m.nome}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-
-                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">3. Dados do abastecimento</h3>
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Hodômetro (km) *</Label>
-                                  <Input type="number" className="text-sm" value={abastecimentoForm.hodometro} onChange={e => setAbastecimentoForm(f => ({ ...f, hodometro: e.target.value }))} placeholder="245890" required />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Horímetro</Label>
-                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.horimetro} onChange={e => setAbastecimentoForm(f => ({ ...f, horimetro: e.target.value }))} placeholder="Ex: 3120.5" />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Tanque cheio? *</Label>
-                                  <Select value={abastecimentoForm.tanque_cheio} onValueChange={v => setAbastecimentoForm(f => ({ ...f, tanque_cheio: v as 'sim' | 'nao' }))}>
-                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="nao">Não</SelectItem>
-                                      <SelectItem value="sim">✅ Sim</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-
-                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">4. COMBUSTÍVEIS E PREÇOS</h3>
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Litros abastecidos – Cavalo *</Label>
-                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.litros_cavalo} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_cavalo: e.target.value }))} placeholder="450" required />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Valor por litro - Cavalo *</Label>
-                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.valor_litro_cavalo} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_litro_cavalo: e.target.value }))} placeholder="Ex: 6.49" required />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Litros abastecidos – Thermo King</Label>
-                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.litros_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_thermo_king: e.target.value }))} placeholder="0" />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Valor por litro - Thermo King</Label>
-                                  <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.valor_litro_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_litro_thermo_king: e.target.value }))} placeholder="Ex: 6.49" />
-                                </div>
-                                <div>
-                                  <Label className="text-xs font-semibold">Abasteceu ARLA? (Sim/Não)</Label>
-                                  <Select value={abastecimentoForm.abasteceu_arla} onValueChange={v => setAbastecimentoForm(f => ({ ...f, abasteceu_arla: v as 'sim' | 'nao' }))}>
-                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="nao">Não</SelectItem>
-                                      <SelectItem value="sim">Sim</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                                {abastecimentoForm.abasteceu_arla === 'sim' && (
-                                  <>
+                              <div className="space-y-3">
+                                {/* Contexto */}
+                                <div className="rounded-xl border border-amber-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-50/60 border-b border-amber-200/60">
+                                    <div className="size-1.5 rounded-full bg-amber-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-amber-700">Contexto</p>
+                                  </div>
+                                  <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
                                     <div>
-                                      <Label className="text-xs font-semibold">Litros ARLA</Label>
-                                      <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.litros_arla} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_arla: e.target.value }))} placeholder="0.00" />
+                                      <Label className="text-xs font-semibold text-muted-foreground">Início <span className="text-amber-600">*</span></Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={abastecimentoForm.inicio_em} onChange={e => setAbastecimentoForm(f => ({ ...f, inicio_em: e.target.value }))} required />
                                     </div>
                                     <div>
-                                      <Label className="text-xs font-semibold">Valor por litro - ARLA</Label>
-                                      <Input type="number" step="0.01" className="text-sm" value={abastecimentoForm.valor_litro_arla} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_litro_arla: e.target.value }))} placeholder="Ex: 4.80" />
+                                      <Label className="text-xs font-semibold text-muted-foreground">Fim</Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={abastecimentoForm.fim_em} onChange={e => setAbastecimentoForm(f => ({ ...f, fim_em: e.target.value }))} />
                                     </div>
-                                  </>
-                                )}
-
-                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">5. PAGAMENTO</h3>
-                                </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Método de pagamento</Label>
-                                  <Select value={abastecimentoForm.forma_pagamento} onValueChange={v => setAbastecimentoForm(f => ({ ...f, forma_pagamento: v }))}>
-                                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                      {metodosPagamentoBrasil.map((metodo) => (
-                                        <SelectItem key={`abastecimento-${metodo}`} value={metodo}>{metodo}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-
-                                <div className="md:col-span-2 border-b pb-2 mb-2 mt-2">
-                                  <h3 className="text-xs font-bold text-primary">6. RESUMO FINANCEIRO</h3>
-                                </div>
-                                <div className="md:col-span-2 rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-emerald-100/60 p-4 shadow-sm">
-                                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                                     <div>
-                                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Resumo financeiro</p>
-                                      <h4 className="text-lg font-semibold text-foreground">Valor total calculado automaticamente</h4>
-                                      <p className="text-sm text-muted-foreground">O total soma Cavalo, Thermo King e ARLA com base nos litros e no preco por litro.</p>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Chegada cliente</Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={abastecimentoForm.chegada_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
                                     </div>
-                                    <div className="rounded-2xl bg-emerald-700 px-4 py-3 text-right text-white shadow-sm">
-                                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-100">Total</p>
-                                      <p className="text-3xl font-bold leading-none">{formatCurrency(abastecimentoResumoFinanceiro.total)}</p>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Partida cliente</Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={abastecimentoForm.partida_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
+                                    </div>
+                                    <div className="col-span-2">
+                                      <Label className="text-xs font-semibold text-muted-foreground">Local / Posto <span className="text-amber-600">*</span></Label>
+                                      <Input className="mt-1.5 text-sm" value={abastecimentoForm.local} onChange={e => setAbastecimentoForm(f => ({ ...f, local: e.target.value }))} placeholder="Aurora/PA — Posto BR" required />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Motorista</Label>
+                                      <Select value={abastecimentoForm.motorista || "__none__"} onValueChange={(v) => setAbastecimentoForm(f => ({ ...f, motorista: v === "__none__" ? "" : v }))}>
+                                        <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="__none__">Nenhum</SelectItem>
+                                          {motoristasCadastro.map((m) => (
+                                            <SelectItem key={m.id} value={m.nome || m.id}>{m.nome || `Motorista ${m.id.slice(0, 8)}`}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Hodômetro (km) <span className="text-amber-600">*</span></Label>
+                                      <Input type="number" className="mt-1.5 text-sm" value={abastecimentoForm.hodometro} onChange={e => setAbastecimentoForm(f => ({ ...f, hodometro: e.target.value }))} placeholder="245890" required />
                                     </div>
                                   </div>
-                                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                                    <div className="rounded-xl border border-border/60 bg-background/80 p-3">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cavalo</p>
-                                      <p className="mt-1 text-lg font-semibold">{formatCurrency(abastecimentoResumoFinanceiro.subtotalCavalo)}</p>
-                                      <p className="text-xs text-muted-foreground">{abastecimentoResumoFinanceiro.litrosCavalo.toFixed(2)} L x {formatCurrency(abastecimentoResumoFinanceiro.valorLitroCavalo)}</p>
+                                </div>
+
+                                {/* Combustíveis */}
+                                <div className="rounded-xl border border-amber-200/70 overflow-hidden">
+                                  <div className="flex items-center justify-between px-4 py-2.5 bg-amber-50/60 border-b border-amber-200/60">
+                                    <div className="flex items-center gap-2">
+                                      <div className="size-1.5 rounded-full bg-amber-500" />
+                                      <p className="text-[11px] font-bold uppercase tracking-widest text-amber-700">Combustíveis</p>
                                     </div>
-                                    <div className="rounded-xl border border-border/60 bg-background/80 p-3">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Thermo King</p>
-                                      <p className="mt-1 text-lg font-semibold">{formatCurrency(abastecimentoResumoFinanceiro.subtotalThermoKing)}</p>
-                                      <p className="text-xs text-muted-foreground">{abastecimentoResumoFinanceiro.litrosThermoKing.toFixed(2)} L x {formatCurrency(abastecimentoResumoFinanceiro.valorLitroThermoKing)}</p>
+                                    <Select value={abastecimentoForm.tanque_cheio} onValueChange={v => setAbastecimentoForm(f => ({ ...f, tanque_cheio: v as 'sim' | 'nao' }))}>
+                                      <SelectTrigger className="h-7 text-xs w-36 border-amber-200"><SelectValue /></SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="nao">Tanque parcial</SelectItem>
+                                        <SelectItem value="sim">Tanque cheio</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                  <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Litros Cavalo <span className="text-amber-600">*</span></Label>
+                                      <Input type="number" step="0.01" className="mt-1.5 text-sm" value={abastecimentoForm.litros_cavalo} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_cavalo: e.target.value }))} placeholder="450" required />
                                     </div>
-                                    <div className="rounded-xl border border-border/60 bg-background/80 p-3">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">ARLA</p>
-                                      <p className="mt-1 text-lg font-semibold">{formatCurrency(abastecimentoResumoFinanceiro.subtotalArla)}</p>
-                                      <p className="text-xs text-muted-foreground">{abastecimentoResumoFinanceiro.litrosArla.toFixed(2)} L x {formatCurrency(abastecimentoResumoFinanceiro.valorLitroArla)}</p>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">R$/L Cavalo <span className="text-amber-600">*</span></Label>
+                                      <Input type="number" step="0.01" className="mt-1.5 text-sm" value={abastecimentoForm.valor_litro_cavalo} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_litro_cavalo: e.target.value }))} placeholder="6.49" required />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Litros Thermo King</Label>
+                                      <Input type="number" step="0.01" className="mt-1.5 text-sm" value={abastecimentoForm.litros_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_thermo_king: e.target.value }))} placeholder="0" />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">R$/L Thermo King</Label>
+                                      <Input type="number" step="0.01" className="mt-1.5 text-sm" value={abastecimentoForm.valor_litro_thermo_king} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_litro_thermo_king: e.target.value }))} placeholder="6.49" />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">ARLA</Label>
+                                      <Select value={abastecimentoForm.abasteceu_arla} onValueChange={v => setAbastecimentoForm(f => ({ ...f, abasteceu_arla: v as 'sim' | 'nao' }))}>
+                                        <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="nao">Não</SelectItem>
+                                          <SelectItem value="sim">Sim</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    {abastecimentoForm.abasteceu_arla === 'sim' && (
+                                      <>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Litros ARLA</Label>
+                                          <Input type="number" step="0.01" className="mt-1.5 text-sm" value={abastecimentoForm.litros_arla} onChange={e => setAbastecimentoForm(f => ({ ...f, litros_arla: e.target.value }))} placeholder="0.00" />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">R$/L ARLA</Label>
+                                          <Input type="number" step="0.01" className="mt-1.5 text-sm" value={abastecimentoForm.valor_litro_arla} onChange={e => setAbastecimentoForm(f => ({ ...f, valor_litro_arla: e.target.value }))} placeholder="4.80" />
+                                        </div>
+                                      </>
+                                    )}
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Pagamento</Label>
+                                      <Select value={abastecimentoForm.forma_pagamento} onValueChange={v => setAbastecimentoForm(f => ({ ...f, forma_pagamento: v }))}>
+                                        <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                          {metodosPagamentoBrasil.map((metodo) => (
+                                            <SelectItem key={`abastecimento-${metodo}`} value={metodo}>{metodo}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Resumo financeiro */}
+                                <div className="rounded-xl border border-emerald-200/70 overflow-hidden">
+                                  <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-50/60 border-b border-emerald-200/60">
+                                    <div className="flex items-center gap-2">
+                                      <div className="size-1.5 rounded-full bg-emerald-500" />
+                                      <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-700">Resumo financeiro</p>
+                                    </div>
+                                    <span className="text-xl font-black text-emerald-700">{formatCurrency(abastecimentoResumoFinanceiro.total)}</span>
+                                  </div>
+                                  <div className="p-4 grid grid-cols-3 gap-3">
+                                    <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
+                                      <p className="text-[10px] font-semibold uppercase text-muted-foreground">Cavalo</p>
+                                      <p className="text-base font-bold mt-0.5">{formatCurrency(abastecimentoResumoFinanceiro.subtotalCavalo)}</p>
+                                      <p className="text-[11px] text-muted-foreground">{abastecimentoResumoFinanceiro.litrosCavalo.toFixed(0)} L × {formatCurrency(abastecimentoResumoFinanceiro.valorLitroCavalo)}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
+                                      <p className="text-[10px] font-semibold uppercase text-muted-foreground">Thermo King</p>
+                                      <p className="text-base font-bold mt-0.5">{formatCurrency(abastecimentoResumoFinanceiro.subtotalThermoKing)}</p>
+                                      <p className="text-[11px] text-muted-foreground">{abastecimentoResumoFinanceiro.litrosThermoKing.toFixed(0)} L × {formatCurrency(abastecimentoResumoFinanceiro.valorLitroThermoKing)}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
+                                      <p className="text-[10px] font-semibold uppercase text-muted-foreground">ARLA</p>
+                                      <p className="text-base font-bold mt-0.5">{formatCurrency(abastecimentoResumoFinanceiro.subtotalArla)}</p>
+                                      <p className="text-[11px] text-muted-foreground">{abastecimentoResumoFinanceiro.litrosArla.toFixed(0)} L × {formatCurrency(abastecimentoResumoFinanceiro.valorLitroArla)}</p>
                                     </div>
                                   </div>
                                 </div>
@@ -4707,122 +4820,125 @@ export function ViagemDetalheClient({
                               </div>
                             )}
                             {quickActionPartidaChegadaAtiva && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Origem</Label>
-                                  <Input
-                                    className="text-sm"
-                                    value={eventForm.origem || viagemState.origem_real || (viagemState.rota?.origem_cidade && viagemState.rota?.origem_estado ? `${viagemState.rota.origem_cidade}/${viagemState.rota.origem_estado}` : "") || ""}
-                                    onChange={e => setEventForm(f => ({ ...f, origem: e.target.value }))}
-                                  />
+                              <div className="space-y-3">
+                                {/* Rota */}
+                                <div className="rounded-xl border border-blue-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
+                                    <div className="size-1.5 rounded-full bg-blue-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Rota</p>
+                                  </div>
+                                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div className="md:col-span-2">
+                                      <Label className="text-xs font-semibold text-muted-foreground">Origem</Label>
+                                      <Input
+                                        className="mt-1.5 text-sm"
+                                        value={eventForm.origem || viagemState.origem_real || (viagemState.rota?.origem_cidade && viagemState.rota?.origem_estado ? `${viagemState.rota.origem_cidade}/${viagemState.rota.origem_estado}` : "") || ""}
+                                        onChange={e => setEventForm(f => ({ ...f, origem: e.target.value }))}
+                                      />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <Label className="text-xs font-semibold text-muted-foreground">Destino</Label>
+                                      <Input
+                                        className="mt-1.5 text-sm"
+                                        value={eventForm.destino || viagemState.destino_real || (viagemState.rota?.destino_cidade && viagemState.rota?.destino_estado ? `${viagemState.rota.destino_cidade}/${viagemState.rota.destino_estado}` : "") || ""}
+                                        onChange={e => setEventForm(f => ({ ...f, destino: e.target.value }))}
+                                      />
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Destino</Label>
-                                  <Input
-                                    className="text-sm"
-                                    value={eventForm.destino || viagemState.destino_real || (viagemState.rota?.destino_cidade && viagemState.rota?.destino_estado ? `${viagemState.rota.destino_cidade}/${viagemState.rota.destino_estado}` : "") || ""}
-                                    onChange={e => setEventForm(f => ({ ...f, destino: e.target.value }))}
-                                  />
-                                </div>
-                                <div className="md:col-span-1">
-                                  <Label className="text-xs font-semibold">Data/Hora partida</Label>
-                                  <Input
-                                    type="datetime-local"
-                                    className="text-sm"
-                                    value={eventForm.inicio_em}
-                                    onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))}
-                                    required
-                                  />
-                                </div>
-                                <div className="md:col-span-1">
-                                  <Label className="text-xs font-semibold">Data/Hora chegada</Label>
-                                  <Input
-                                    type="datetime-local"
-                                    className="text-sm"
-                                    value={eventForm.fim_em}
-                                    onChange={e => setEventForm(f => ({ ...f, fim_em: e.target.value }))}
-                                  />
-                                </div>
-                                <div className="md:col-span-2">
-                                  <Label className="text-xs font-semibold">Observação</Label>
-                                  <Textarea
-                                    className="text-sm"
-                                    rows={3}
-                                    value={eventForm.observacao}
-                                    onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))}
-                                  />
+
+                                {/* Horários */}
+                                <div className="rounded-xl border border-blue-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
+                                    <div className="size-1.5 rounded-full bg-blue-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Horários</p>
+                                  </div>
+                                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Data/Hora partida <span className="text-blue-600">*</span></Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Data/Hora chegada</Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.fim_em} onChange={e => setEventForm(f => ({ ...f, fim_em: e.target.value }))} />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <Label className="text-xs font-semibold text-muted-foreground">Observação</Label>
+                                      <Textarea className="mt-1.5 text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Observações da partida ou chegada" />
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             )}
                             {selectedQuickAction && selectedQuickAction.type === 'parada' && (
-                              <div className="space-y-4">
-                                <div className="rounded-2xl border border-border/60 bg-white/90 p-4 shadow-sm">
-                                  <div className="border-b border-border/60 pb-3 mb-4">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary/70">Parada operacional</p>
-                                    <h3 className="text-lg font-semibold text-foreground">Lançamento de parada</h3>
-                                    <p className="text-sm text-muted-foreground">Organize o registro com tipo, janela operacional e contexto do local.</p>
+                              <div className="space-y-3">
+                                {/* Dados principais */}
+                                <div className="rounded-xl border border-orange-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-orange-50/60 border-b border-orange-200/60">
+                                    <div className="size-1.5 rounded-full bg-orange-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-orange-700">Parada</p>
                                   </div>
-
-                                  <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                                      <div className="xl:col-span-1">
-                                        <Label className="text-xs font-semibold">Tipo de Parada *</Label>
-                                        <Select value={tipoParadaSelecionado} onValueChange={v => setTipoParadaSelecionado(v as any)}>
-                                          <SelectTrigger className="mt-1 text-sm"><SelectValue /></SelectTrigger>
-                                          <SelectContent>
-                                            <SelectItem value="carga">Carga</SelectItem>
-                                            <SelectItem value="descarga">Descarga</SelectItem>
-                                            <SelectItem value="descanso">Descanso</SelectItem>
-                                            <SelectItem value="parada_operacional">Parada Operacional</SelectItem>
-                                            <SelectItem value="ocorrencia">Ocorrência</SelectItem>
-                                          </SelectContent>
-                                        </Select>
-                                      </div>
-                                      <div className="md:col-span-1 xl:col-span-1">
-                                        <Label className="text-xs font-semibold">Data/Hora início</Label>
-                                        <Input type="datetime-local" className="mt-1 text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
-                                      </div>
-                                      <div className="md:col-span-1 xl:col-span-1">
-                                        <Label className="text-xs font-semibold">Data/Hora fim</Label>
-                                        <Input type="datetime-local" className="mt-1 text-sm" value={eventForm.fim_em} onChange={e => setEventForm(f => ({ ...f, fim_em: e.target.value }))} />
-                                      </div>
-                                      <div className="md:col-span-2 xl:col-span-3">
-                                        <Label className="text-xs font-semibold">Local</Label>
-                                        <Input className="mt-1 text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} placeholder="Ex: Cliente, pátio, posto, base operacional" required />
-                                      </div>
-                                      {(tipoParadaSelecionado === 'carga' || tipoParadaSelecionado === 'descarga') && (
-                                        <>
-                                          <div className="md:col-span-1 xl:col-span-1">
-                                            <Label className="text-xs font-semibold">Chegada no cliente</Label>
-                                            <Input type="datetime-local" className="mt-1 text-sm" value={eventForm.chegada_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
-                                          </div>
-                                          <div className="md:col-span-1 xl:col-span-1">
-                                            <Label className="text-xs font-semibold">Partida no cliente</Label>
-                                            <Input type="datetime-local" className="mt-1 text-sm" value={eventForm.partida_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
-                                          </div>
-                                        </>
-                                      )}
-                                      <div className="md:col-span-2 xl:col-span-3">
-                                        <Label className="text-xs font-semibold">Observação</Label>
-                                        <Textarea className="mt-1 text-sm" rows={4} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Detalhe o motivo, a operação executada ou qualquer contexto relevante." />
-                                      </div>
+                                  <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Tipo <span className="text-orange-600">*</span></Label>
+                                      <Select value={tipoParadaSelecionado} onValueChange={v => setTipoParadaSelecionado(v as any)}>
+                                        <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="carga">Carga</SelectItem>
+                                          <SelectItem value="descarga">Descarga</SelectItem>
+                                          <SelectItem value="descanso">Descanso</SelectItem>
+                                          <SelectItem value="parada_operacional">Parada Operacional</SelectItem>
+                                          <SelectItem value="ocorrencia">Ocorrência</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Início <span className="text-orange-600">*</span></Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Fim</Label>
+                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.fim_em} onChange={e => setEventForm(f => ({ ...f, fim_em: e.target.value }))} />
+                                    </div>
+                                    <div className="md:col-span-2 xl:col-span-3">
+                                      <Label className="text-xs font-semibold text-muted-foreground">Local <span className="text-orange-600">*</span></Label>
+                                      <Input className="mt-1.5 text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} placeholder="Cliente, pátio, posto, base..." required />
+                                    </div>
+                                    {(tipoParadaSelecionado === 'carga' || tipoParadaSelecionado === 'descarga') && (
+                                      <>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Chegada no cliente</Label>
+                                          <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.chegada_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Partida do cliente</Label>
+                                          <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.partida_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
+                                        </div>
+                                      </>
+                                    )}
+                                    <div className="md:col-span-2 xl:col-span-3">
+                                      <Label className="text-xs font-semibold text-muted-foreground">Observação</Label>
+                                      <Textarea className="mt-1.5 text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Contexto da parada..." />
                                     </div>
                                   </div>
+                                </div>
 
+                                {/* Ocorrência vinculada */}
                                 {tipoParadaSelecionado === 'ocorrencia' && (
-                                  <div className="rounded-2xl border border-amber-200/70 bg-gradient-to-br from-amber-50 via-white to-orange-50 p-4 shadow-sm">
-                                    <div className="border-b border-amber-200/70 pb-3">
-                                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Ocorrência vinculada</p>
-                                      <h4 className="text-lg font-semibold text-foreground">Detalhamento da ocorrência</h4>
+                                  <div className="rounded-xl border border-red-200/70 overflow-hidden">
+                                    <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50/60 border-b border-red-200/60">
+                                      <div className="size-1.5 rounded-full bg-red-500" />
+                                      <p className="text-[11px] font-bold uppercase tracking-widest text-red-700">Ocorrência</p>
                                     </div>
-                                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                                    <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                                       <div>
-                                        <Label className="text-xs font-semibold">Categoria</Label>
-                                        <Input className="mt-1 text-sm" value={ocorrenciaForm.categoria} onChange={e => setOcorrenciaForm(f => ({ ...f, categoria: e.target.value }))} placeholder="Ex: Acidente, Pane" required />
+                                        <Label className="text-xs font-semibold text-muted-foreground">Categoria</Label>
+                                        <Input className="mt-1.5 text-sm" value={ocorrenciaForm.categoria} onChange={e => setOcorrenciaForm(f => ({ ...f, categoria: e.target.value }))} placeholder="Acidente, Pane..." />
                                       </div>
                                       <div>
-                                        <Label className="text-xs font-semibold">Severidade</Label>
+                                        <Label className="text-xs font-semibold text-muted-foreground">Severidade</Label>
                                         <Select value={ocorrenciaForm.severidade} onValueChange={v => setOcorrenciaForm(f => ({ ...f, severidade: v }))}>
-                                          <SelectTrigger className="mt-1 text-sm"><SelectValue /></SelectTrigger>
+                                          <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
                                           <SelectContent>
                                             <SelectItem value="baixa">Baixa</SelectItem>
                                             <SelectItem value="media">Média</SelectItem>
@@ -4832,9 +4948,9 @@ export function ViagemDetalheClient({
                                         </Select>
                                       </div>
                                       <div>
-                                        <Label className="text-xs font-semibold">Houve Parada?</Label>
+                                        <Label className="text-xs font-semibold text-muted-foreground">Houve parada?</Label>
                                         <Select value={ocorrenciaForm.houve_parada} onValueChange={v => setOcorrenciaForm(f => ({ ...f, houve_parada: v }))}>
-                                          <SelectTrigger className="mt-1 text-sm"><SelectValue /></SelectTrigger>
+                                          <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
                                           <SelectContent>
                                             <SelectItem value="nao">Não</SelectItem>
                                             <SelectItem value="sim">Sim</SelectItem>
@@ -4842,28 +4958,20 @@ export function ViagemDetalheClient({
                                         </Select>
                                       </div>
                                       <div>
-                                        <Label className="text-xs font-semibold">Tempo Parado (min)</Label>
-                                        <Input type="number" className="mt-1 text-sm" value={ocorrenciaForm.tempo_parado_min} onChange={e => setOcorrenciaForm(f => ({ ...f, tempo_parado_min: e.target.value }))} placeholder="Ex: 45" />
+                                        <Label className="text-xs font-semibold text-muted-foreground">Tempo parado (min)</Label>
+                                        <Input type="number" className="mt-1.5 text-sm" value={ocorrenciaForm.tempo_parado_min} onChange={e => setOcorrenciaForm(f => ({ ...f, tempo_parado_min: e.target.value }))} placeholder="45" />
                                       </div>
                                       <div className="md:col-span-2 xl:col-span-2">
-                                        <Label className="text-xs font-semibold">Ação imediata</Label>
-                                        <Textarea className="mt-1 text-sm" rows={3} value={ocorrenciaForm.acao_imediata} onChange={e => setOcorrenciaForm(f => ({ ...f, acao_imediata: e.target.value }))} placeholder="O que foi feito imediatamente para conter ou resolver a situação." />
+                                        <Label className="text-xs font-semibold text-muted-foreground">Ação imediata</Label>
+                                        <Textarea className="mt-1.5 text-sm" rows={2} value={ocorrenciaForm.acao_imediata} onChange={e => setOcorrenciaForm(f => ({ ...f, acao_imediata: e.target.value }))} placeholder="Ação tomada..." />
                                       </div>
                                       <div>
-                                        <Label className="text-xs font-semibold">Responsável</Label>
-                                        <Input className="mt-1 text-sm" value={ocorrenciaForm.responsavel_acao} onChange={e => setOcorrenciaForm(f => ({ ...f, responsavel_acao: e.target.value }))} placeholder="Nome do responsável" />
+                                        <Label className="text-xs font-semibold text-muted-foreground">Responsável</Label>
+                                        <Input className="mt-1.5 text-sm" value={ocorrenciaForm.responsavel_acao} onChange={e => setOcorrenciaForm(f => ({ ...f, responsavel_acao: e.target.value }))} />
                                       </div>
                                       <div>
-                                        <Label className="text-xs font-semibold">Contato</Label>
-                                        <Input className="mt-1 text-sm" value={ocorrenciaForm.contato} onChange={e => setOcorrenciaForm(f => ({ ...f, contato: e.target.value }))} placeholder="Telefone ou e-mail" />
-                                      </div>
-                                      <div>
-                                        <Label className="text-xs font-semibold">Prazo solução</Label>
-                                        <Input type="datetime-local" className="mt-1 text-sm" value={ocorrenciaForm.prazo_solucao} onChange={e => setOcorrenciaForm(f => ({ ...f, prazo_solucao: e.target.value }))} />
-                                      </div>
-                                      <div>
-                                        <Label className="text-xs font-semibold">Protocolo</Label>
-                                        <Input className="mt-1 text-sm" value={ocorrenciaForm.protocolo} onChange={e => setOcorrenciaForm(f => ({ ...f, protocolo: e.target.value }))} placeholder="Número de protocolo" />
+                                        <Label className="text-xs font-semibold text-muted-foreground">Contato</Label>
+                                        <Input className="mt-1.5 text-sm" value={ocorrenciaForm.contato} onChange={e => setOcorrenciaForm(f => ({ ...f, contato: e.target.value }))} placeholder="Telefone ou e-mail" />
                                       </div>
                                     </div>
                                   </div>
@@ -4871,36 +4979,28 @@ export function ViagemDetalheClient({
                               </div>
                             )}
                             {selectedQuickAction && selectedQuickAction.type === 'manutencao' && (
-                              <div className="space-y-4">
-                                <div className="rounded-xl border border-primary/20 bg-gradient-to-r from-primary/[0.08] to-background px-3 py-2">
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <p className="text-xs font-semibold text-foreground">Lançamento de manutenção</p>
-                                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                                      <Badge variant="secondary" className="rounded-full">Obrigatórios: Data/Hora, Local, Tipo</Badge>
-                                      <Badge variant="outline" className="rounded-full font-semibold">
-                                        {formatCurrency(parseDecimalInput(manutencaoForm.valor_total || "0"))}
-                                      </Badge>
-                                    </div>
+                              <div className="space-y-3">
+                                {/* Contexto */}
+                                <div className="rounded-xl border border-red-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50/60 border-b border-red-200/60">
+                                    <div className="size-1.5 rounded-full bg-red-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-red-700">Contexto</p>
                                   </div>
-                                </div>
-
-                                <div className="rounded-xl border bg-card p-3">
-                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">1. CONTEXTO OPERACIONAL</h3>
-                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                  <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                                     <div>
-                                      <Label className="text-xs font-semibold">Data/Hora *</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Data/Hora <span className="text-red-600">*</span></Label>
                                       <Input
                                         type="datetime-local"
-                                        className="mt-1 text-sm"
+                                        className="mt-1.5 text-sm"
                                         value={manutencaoForm.inicio_em}
                                         onChange={e => setManutencaoForm(f => ({ ...f, inicio_em: e.target.value }))}
                                         required
                                       />
                                     </div>
                                     <div>
-                                      <Label className="text-xs font-semibold">Tipo de Manutenção *</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Tipo <span className="text-red-600">*</span></Label>
                                       <Select value={manutencaoForm.tipo_manutencao} onValueChange={v => setManutencaoForm(f => ({ ...f, tipo_manutencao: v as any }))}>
-                                        <SelectTrigger className="mt-1 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                                        <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
                                         <SelectContent>
                                           <SelectItem value="preventiva">Preventiva</SelectItem>
                                           <SelectItem value="corretiva">Corretiva</SelectItem>
@@ -4915,9 +5015,9 @@ export function ViagemDetalheClient({
                                       </Select>
                                     </div>
                                     <div className="md:col-span-2">
-                                      <Label className="text-xs font-semibold">Local *</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Local <span className="text-red-600">*</span></Label>
                                       <Input
-                                        className="mt-1 text-sm"
+                                        className="mt-1.5 text-sm"
                                         value={manutencaoForm.local}
                                         onChange={e => setManutencaoForm(f => ({ ...f, local: e.target.value }))}
                                         placeholder="Ex: Oficina Central - Xinguara"
@@ -4927,45 +5027,54 @@ export function ViagemDetalheClient({
                                   </div>
                                 </div>
 
-                                <div className="rounded-xl border bg-card p-3">
-                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">2. CUSTO E CONTROLE</h3>
-                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                {/* Custo */}
+                                <div className="rounded-xl border border-red-200/70 overflow-hidden">
+                                  <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-red-50/60 border-b border-red-200/60">
+                                    <div className="flex items-center gap-2">
+                                      <div className="size-1.5 rounded-full bg-red-500" />
+                                      <p className="text-[11px] font-bold uppercase tracking-widest text-red-700">Custo</p>
+                                    </div>
+                                    <span className="text-xs font-semibold text-red-700">
+                                      {formatCurrency(parseDecimalInput(manutencaoForm.valor_total || "0"))}
+                                    </span>
+                                  </div>
+                                  <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                                     <div>
-                                      <Label className="text-xs font-semibold">Hodômetro</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Hodômetro</Label>
                                       <Input
                                         type="number"
                                         inputMode="numeric"
-                                        className="mt-1 text-sm"
+                                        className="mt-1.5 text-sm"
                                         value={manutencaoForm.hodometro}
                                         onChange={e => setManutencaoForm(f => ({ ...f, hodometro: e.target.value }))}
                                         placeholder="Ex: 150000"
                                       />
                                     </div>
                                     <div>
-                                      <Label className="text-xs font-semibold">Valor Total</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Valor Total</Label>
                                       <Input
                                         type="number"
                                         inputMode="decimal"
                                         step="0.01"
-                                        className="mt-1 text-sm"
+                                        className="mt-1.5 text-sm"
                                         value={manutencaoForm.valor_total}
                                         onChange={e => setManutencaoForm(f => ({ ...f, valor_total: e.target.value }))}
                                         placeholder="Ex: 500.00"
                                       />
                                     </div>
                                     <div>
-                                      <Label className="text-xs font-semibold">Nota Fiscal</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Nota Fiscal</Label>
                                       <Input
-                                        className="mt-1 text-sm"
+                                        className="mt-1.5 text-sm"
                                         value={manutencaoForm.nota_fiscal}
                                         onChange={e => setManutencaoForm(f => ({ ...f, nota_fiscal: e.target.value }))}
                                         placeholder="Ex: 123456"
                                       />
                                     </div>
                                     <div>
-                                      <Label className="text-xs font-semibold">Método de pagamento</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Pagamento</Label>
                                       <Select value={manutencaoForm.forma_pagamento} onValueChange={v => setManutencaoForm(f => ({ ...f, forma_pagamento: v }))}>
-                                        <SelectTrigger className="mt-1 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                                        <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
                                         <SelectContent>
                                           {metodosPagamentoBrasil.map((metodo) => (
                                             <SelectItem key={`manutencao-${metodo}`} value={metodo}>{metodo}</SelectItem>
@@ -4976,47 +5085,47 @@ export function ViagemDetalheClient({
                                   </div>
                                 </div>
 
-                                <div className="rounded-xl border bg-card p-3">
-                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">3. DESCRIÇÃO DO SERVIÇO</h3>
-                                  <div>
-                                    <Label className="text-xs font-semibold">Observação</Label>
+                                {/* Descrição */}
+                                <div className="rounded-xl border border-red-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50/60 border-b border-red-200/60">
+                                    <div className="size-1.5 rounded-full bg-red-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-red-700">Descrição</p>
+                                  </div>
+                                  <div className="p-4">
                                     <Textarea
-                                      className="mt-1 text-sm"
-                                      rows={4}
+                                      className="text-sm"
+                                      rows={3}
                                       value={manutencaoForm.observacao}
                                       onChange={e => setManutencaoForm(f => ({ ...f, observacao: e.target.value }))}
-                                      placeholder="Descreva o serviço realizado, peças trocadas e qualquer recomendação para o próximo ciclo."
+                                      placeholder="Serviços realizados e peças substituídas"
                                     />
                                   </div>
                                 </div>
                               </div>
                             )}
                             {selectedQuickAction && selectedQuickAction.title === 'Documentação' && (
-                              <div className="space-y-4">
-                                <div className="rounded-xl border border-primary/20 bg-gradient-to-r from-primary/[0.08] to-background px-3 py-2">
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <p className="text-xs font-semibold text-foreground">Entrega de documentação</p>
-                                    <Badge variant="secondary" className="rounded-full text-[11px]">Campos obrigatórios: Data/Hora e Local</Badge>
+                              <div className="space-y-3">
+                                {/* Dados da entrega */}
+                                <div className="rounded-xl border border-violet-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
+                                    <div className="size-1.5 rounded-full bg-violet-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Dados da entrega</p>
                                   </div>
-                                </div>
-
-                                <div className="rounded-xl border bg-card p-3">
-                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">1. DADOS DA ENTREGA</h3>
-                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                  <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                                     <div>
-                                      <Label className="text-xs font-semibold">Data/Hora da entrega *</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Data/Hora <span className="text-violet-600">*</span></Label>
                                       <Input
                                         type="datetime-local"
-                                        className="mt-1 text-sm"
+                                        className="mt-1.5 text-sm"
                                         value={eventForm.inicio_em}
                                         onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))}
                                         required
                                       />
                                     </div>
                                     <div>
-                                      <Label className="text-xs font-semibold">Local *</Label>
+                                      <Label className="text-xs font-semibold text-muted-foreground">Local <span className="text-violet-600">*</span></Label>
                                       <Input
-                                        className="mt-1 text-sm"
+                                        className="mt-1.5 text-sm"
                                         value={eventForm.local}
                                         onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))}
                                         placeholder="Ex: Cliente X - Recebimento"
@@ -5026,14 +5135,17 @@ export function ViagemDetalheClient({
                                   </div>
                                 </div>
 
-                                <div className="rounded-xl border bg-card p-3">
-                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">2. COMPROVANTE VISUAL</h3>
-                                  <div>
-                                    <Label className="text-xs font-semibold">Carregamento da imagem</Label>
+                                {/* Comprovante */}
+                                <div className="rounded-xl border border-violet-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
+                                    <div className="size-1.5 rounded-full bg-violet-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Comprovante</p>
+                                  </div>
+                                  <div className="p-4">
                                     <Input
                                       type="file"
                                       accept="image/*"
-                                      className="mt-1 text-sm"
+                                      className="text-sm"
                                       onChange={(e) => {
                                         const file = e.target.files?.[0]
                                         if (file) {
@@ -5046,25 +5158,27 @@ export function ViagemDetalheClient({
                                         }
                                       }}
                                     />
+                                    {documentacaoQuickActionPreview && documentacaoQuickActionFile?.type.startsWith('image/') && (
+                                      <div className="mt-3 rounded-lg border border-violet-200/60 bg-violet-50/40 p-3">
+                                        <img src={documentacaoQuickActionPreview} alt="pré-visualização da documentação" className="max-h-48 w-auto rounded" />
+                                      </div>
+                                    )}
                                   </div>
-                                  {documentacaoQuickActionPreview && documentacaoQuickActionFile?.type.startsWith('image/') && (
-                                    <div className="mt-3 rounded-lg border border-border/60 bg-muted/30 p-3">
-                                      <p className="mb-2 text-xs font-semibold text-muted-foreground">Pré-visualização</p>
-                                      <img src={documentacaoQuickActionPreview} alt="pré-visualização da documentação" className="max-h-48 w-auto rounded" />
-                                    </div>
-                                  )}
                                 </div>
 
-                                <div className="rounded-xl border bg-card p-3">
-                                  <h3 className="mb-3 border-b pb-2 text-xs font-bold tracking-wide text-primary">3. OBSERVAÇÕES</h3>
-                                  <div>
-                                    <Label className="text-xs font-semibold">Observações</Label>
+                                {/* Observações */}
+                                <div className="rounded-xl border border-violet-200/70 overflow-hidden">
+                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
+                                    <div className="size-1.5 rounded-full bg-violet-500" />
+                                    <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Observações</p>
+                                  </div>
+                                  <div className="p-4">
                                     <Textarea
-                                      className="mt-1 text-sm"
-                                      rows={4}
+                                      className="text-sm"
+                                      rows={3}
                                       value={eventForm.observacao}
                                       onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))}
-                                      placeholder="Descreva contexto da entrega, recebedor ou ressalvas importantes."
+                                      placeholder="Recebedor, ressalvas ou contexto da entrega"
                                     />
                                   </div>
                                 </div>
@@ -5072,14 +5186,14 @@ export function ViagemDetalheClient({
                             )}
                           </div>
                         </div>
-                        {/* Botões fixos na base */}
-                        <div style={{ borderTop: '1px solid var(--border)', background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, var(--background) 100%)', padding: '1rem 1.5rem', display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexShrink: 0 }}>
+                        {/* Rodapé fixo */}
+                        <div style={{ borderTop: '1px solid var(--border)', background: 'var(--card)', padding: '0.875rem 1.5rem', display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexShrink: 0 }}>
                           <div className="flex min-w-[220px] items-center gap-2">
                             <Button
                               type="button"
                               variant="outline"
                               onClick={() => setQuickActionsModalOpen(false)}
-                              className="min-w-[120px] rounded-xl"
+                              className="min-w-[100px] rounded-lg h-9 text-sm"
                             >
                               Fechar
                             </Button>
@@ -5100,7 +5214,7 @@ export function ViagemDetalheClient({
                                   <AlertDialogHeader>
                                     <AlertDialogTitle>Apagar evento do ciclo?</AlertDialogTitle>
                                     <AlertDialogDescription>
-                                      Esta ação remove o evento permanentemente e não pode ser desfeita.
+                                      Esta ação não pode ser desfeita.
                                     </AlertDialogDescription>
                                   </AlertDialogHeader>
                                   <AlertDialogFooter>
@@ -5119,123 +5233,206 @@ export function ViagemDetalheClient({
                               </AlertDialog>
                             ) : null}
                           </div>
-                          <Button 
-                            type="button" 
-                            onClick={async () => { 
+                          <Button
+                            type="button"
+                            onClick={async () => {
                               if (!selectedQuickAction) {
                                 alert("Selecione uma ação para continuar.")
                                 return
                               }
                               await handleSaveEvent()
                               setQuickActionsModalOpen(false)
-                            }} 
-                            disabled={!selectedQuickAction || loading} 
-                            style={{ flex: 1, margin: '0 0.5rem', padding: '0.65rem' }} 
-                            className="rounded-xl text-sm font-semibold shadow-sm"
+                            }}
+                            disabled={!selectedQuickAction || loading}
+                            style={{ flex: 1, margin: '0 0.5rem' }}
+                            className="gradient-primary rounded-lg h-9 text-sm font-semibold shadow-sm"
                           >
-                            {loading ? "Salvando..." : activeTimelineEvent ? "Salvar alterações" : "Salvar"}
+                            {loading ? <><Loader2 className="size-4 mr-2 animate-spin" />Salvando...</> : activeTimelineEvent ? "Salvar alterações" : "Salvar evento"}
                           </Button>
-                          <div className="min-w-[120px] text-right text-xs text-muted-foreground">
-                            {selectedQuickAction ? `Aba atual: ${selectedQuickAction.title}` : "Nenhuma aba selecionada"}
+                          <div className="min-w-[100px] text-right text-[11px] text-muted-foreground">
+                            {selectedQuickAction ? selectedQuickAction.title : "Nenhum tipo"}
                           </div>
                         </div>
                       </div>
                     </DialogContent>
                   </Dialog>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </div>
           </div>
         </TabsContent>
 
         <TabsContent value="kpis" className="space-y-4 min-h-0">
-          <Card className="border-border/50">
-            <CardHeader>
-              <CardTitle>Waterfall do ciclo (média de tempo por evento)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {waterfallSeriesCiclo.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Sem eventos suficientes para construir o gráfico.</p>
-              ) : (
-                <ChartContainer
-                  className="h-[260px] sm:h-[300px]"
-                  config={{
-                    base: { label: "Base", color: "transparent" },
-                    valor: { label: "Tempo (min)", color: "var(--color-chart-1)" },
-                  }}
-                >
-                  <BarChart data={waterfallSeriesCiclo} margin={{ left: 8, right: 8 }}>
-                    <CartesianGrid vertical={false} />
-                    <XAxis dataKey="etapa" tickLine={false} axisLine={false} />
-                    <YAxis tickLine={false} axisLine={false} />
-                    <ChartTooltip
-                      content={<ChartTooltipContent formatter={(value) => `${Number(value).toFixed(1)} min`} />}
-                    />
-                    <Bar dataKey="base" stackId="a" fill="transparent" />
-                    <Bar dataKey="valor" stackId="a" radius={[6, 6, 0, 0]}>
-                      {waterfallSeriesCiclo.map((item, index) => {
-                        const fill = item.etapa === "Total" ? "var(--color-chart-2)" : "var(--color-chart-1)"
-                        return <Cell key={index} fill={fill} />
-                      })}
-                    </Bar>
-                  </BarChart>
-                </ChartContainer>
-              )}
-            </CardContent>
-          </Card>
-
-          <div className={embedded ? "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"}>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">km/L cavalo</p><p className="text-lg font-semibold leading-tight break-words">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)} km/L` : "A DEFINIR"}</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">L/h Thermo King</p><p className="text-lg font-semibold leading-tight break-words">{lhThermoKing !== null ? `${lhThermoKing.toFixed(2)} L/h` : "A DEFINIR"}</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Custo por km</p><p className="text-lg font-semibold leading-tight break-words">{formatCurrency(custoPorKm)}</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Consumo por motorista</p><p className="text-lg font-semibold leading-tight break-words">{consumoPorMotorista !== null ? `${consumoPorMotorista.toFixed(2)} km/L` : "A DEFINIR"}</p><p className="text-xs text-muted-foreground">{viagemState.motorista?.nome || "Motorista não definido"}</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Consumo por ciclo</p><p className="text-lg font-semibold leading-tight break-words">{litrosConsumidosCiclo !== null ? `${litrosConsumidosCiclo.toFixed(0)} L` : "A DEFINIR"}</p></CardContent></Card>
-            <Card className="border-border/50 transition-colors hover:bg-muted/30"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Consumo entre tanque cheio</p><p className="text-lg font-semibold leading-tight break-words">{consumoEntreTanqueCheio !== null ? `${consumoEntreTanqueCheio.toFixed(2)} km/L` : "A DEFINIR"}</p></CardContent></Card>
-          </div>
-
-          <Card className="border-border/50">
-            <CardHeader>
-              <CardTitle>Atraso por ponto de passagem</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {atrasoPorPontos.length === 0 && (
-                <p className="text-muted-foreground">Sem baseline planejado. Defina previsão por trecho para medir atraso.</p>
-              )}
-              {atrasoPorPontos.map((item) => (
-                <div key={item.id} className="rounded-md border border-border/60 p-3">
-                  <p className="font-medium">{item.label}</p>
-                  <p className="text-muted-foreground">Previsão: {formatDateTime(item.previstoEm)}</p>
-                  <p className="text-muted-foreground">Real: {formatDateTime(item.realizadoEm)}</p>
-                  <p className={item.atrasoMin !== null && item.atrasoMin > 0 ? "text-amber-600" : "text-muted-foreground"}>
-                    {item.atrasoMin === null
-                      ? "Aguardando chegada real"
-                      : item.atrasoMin > 0
-                        ? `Atraso: +${formatDurationByUnit(item.atrasoMin)}`
-                        : item.atrasoMin < 0
-                          ? `Adiantado: ${formatDurationByUnit(Math.abs(item.atrasoMin))}`
-                          : "No horário"}
-                  </p>
+          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-border/50">
+                <h3 className="text-sm font-semibold text-foreground">Visão geral de KPIs</h3>
+              </div>
+              <div className="p-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {/* Health Score — destacado */}
+                <div className={`rounded-xl border-2 p-4 ${healthScore >= 70 ? "border-emerald-300 bg-emerald-50/80" : healthScore >= 40 ? "border-amber-300 bg-amber-50/80" : "border-red-300 bg-red-50/80"}`}>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Health Score</p>
+                  <p className={`mt-1 text-4xl font-black ${healthScoreLabel.color}`}>{healthScore}</p>
+                  <p className={`text-xs font-bold mt-0.5 ${healthScoreLabel.color}`}>{healthScoreLabel.label}</p>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
+                {/* Margem — colorida por status */}
+                <div className={`rounded-xl border-2 p-4 ${lucro >= 0 ? "border-emerald-300 bg-emerald-50/80" : "border-red-300 bg-red-50/80"}`}>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Margem estimada</p>
+                  <p className={`mt-1 text-4xl font-black ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Lucro: {formatCurrency(lucro)}</p>
+                </div>
+                {/* Progresso */}
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Progresso da rota</p>
+                  <p className="mt-1 text-4xl font-black text-primary">{progressoRotaPercent.toFixed(0)}%</p>
+                  <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div className={`h-full rounded-full ${progressoRotaPercent >= 80 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${progressoRotaPercent}%` }} />
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">{kmPercorrido.toLocaleString("pt-BR")} km / {kmPlanejado.toLocaleString("pt-BR")} km</p>
+                </div>
+                {/* Conformidade */}
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Cumprimento</p>
+                  <p className="mt-1 text-3xl font-black text-foreground">{eventosConformidadePercent !== null ? `${eventosConformidadePercent}%` : "—"}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{eventosRealizados.length} de {eventosRealizados.length + eventosPlanejados.length} eventos</p>
+                </div>
+                {/* Tempo parado */}
+                <div className={`rounded-xl border p-4 ${tempoTotalParadoMin > 120 ? "border-amber-200 bg-amber-50/60" : "border-border/60 bg-muted/20"}`}>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Tempo parado</p>
+                  <p className={`mt-1 text-3xl font-black ${tempoTotalParadoMin > 120 ? "text-amber-700" : "text-foreground"}`}>{formatDurationByUnit(tempoTotalParadoMin)}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Impacto operacional</p>
+                </div>
+                {/* Custo/km */}
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Custo/km</p>
+                  <p className="mt-1 text-3xl font-black text-foreground">{custoPorKm > 0 ? formatCurrency(custoPorKm) : "—"}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{kmTotalCiclo > 0 ? `${kmTotalCiclo.toLocaleString("pt-BR")} km no ciclo` : "Sem km registrado"}</p>
+                </div>
+              </div>
+            </div>
 
-          <Card className="border-border/50">
-            <CardHeader>
-              <CardTitle>Custo total por categoria</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {custosPorCategoria.map((item) => (
-                <div key={item.categoria} className="space-y-1">
-                  <div className="flex justify-between text-sm"><span>{item.categoria}</span><span>{formatCurrency(item.valor)} ({item.percentual.toFixed(1)}%)</span></div>
-                  <div className="h-2 rounded bg-muted overflow-hidden">
-                    <div className="h-full bg-primary" style={{ width: `${item.percentual}%` }} />
+            <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-border/50">
+                <h3 className="text-sm font-semibold text-foreground">Resumo financeiro</h3>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="rounded-xl border-l-2 border-emerald-400 bg-emerald-50/60 p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">Receita total</p>
+                      <p className="mt-1 text-2xl font-bold text-emerald-700">{formatCurrency(receitaTotal)}</p>
+                    </div>
+                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold text-emerald-800">Frete + extras</span>
                   </div>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
+                <div className="rounded-xl border-l-2 border-red-400 bg-red-50/60 p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">Custo total</p>
+                      <p className="mt-1 text-2xl font-bold text-red-700">{formatCurrency(custosTotal)}</p>
+                    </div>
+                    <span className="rounded-full bg-red-100 px-3 py-1 text-[11px] font-semibold text-red-700">Diesel e despesas</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-border/50">
+                <h3 className="text-sm font-semibold text-foreground">Eficiência de combustível</h3>
+              </div>
+              <div className="p-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">km/L cavalo</p>
+                  <p className="mt-2 text-2xl font-bold text-foreground">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)} km/L` : "—"}</p>
+                </div>
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">L/h Thermo King</p>
+                  <p className="mt-2 text-2xl font-bold text-foreground">{lhThermoKing !== null ? `${lhThermoKing.toFixed(2)} L/h` : "—"}</p>
+                </div>
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Consumo no ciclo</p>
+                  <p className="mt-2 text-2xl font-bold text-foreground">{litrosConsumidosCiclo !== null ? `${litrosConsumidosCiclo.toFixed(0)} L` : "—"}</p>
+                </div>
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Entre tanques cheios</p>
+                  <p className="mt-2 text-2xl font-bold text-foreground">{consumoEntreTanqueCheio !== null ? `${consumoEntreTanqueCheio.toFixed(2)} km/L` : "—"}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-border/50">
+                <h3 className="text-sm font-semibold text-foreground">Operação</h3>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Eventos realizados</p>
+                  <p className="mt-2 text-2xl font-bold text-foreground">{eventosRealizados.length}</p>
+                  <p className="text-sm text-muted-foreground">Planejados: {eventosPlanejados.length}</p>
+                </div>
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Último ponto atualizado</p>
+                  <p className="mt-2 text-base font-semibold text-foreground">{ultimoMarco ? `${eventTypeLabels[ultimoMarco.tipo_evento]} · ${ultimoMarco.local || "A definir"}` : "A definir"}</p>
+                  <p className="text-sm text-muted-foreground">{ultimoMarco ? formatDateTime(ultimoMarco.ocorrido_em) : "Sem registro"}</p>
+                </div>
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Próximo evento previsto</p>
+                  <p className="mt-2 text-2xl font-bold text-foreground">{proximoMarcoPrevisto ? eventTypeLabels[proximoMarcoPrevisto.tipo_evento] : "Nenhuma previsão"}</p>
+                  <p className="text-sm text-muted-foreground">{proximoMarcoPrevisto ? formatDateTime(proximoMarcoPrevisto.previsto_em as string) : "Sem próxima previsão"}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-border/50">
+                <h3 className="text-sm font-semibold text-foreground">Atrasos por ponto</h3>
+              </div>
+              <div className="p-4 space-y-3">
+                {atrasoPorPontos.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Sem baseline planejado.</p>
+                ) : (
+                  atrasoPorPontos.map((item) => (
+                    <div key={item.id} className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-foreground">{item.label}</p>
+                        <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${item.atrasoMin !== null && item.atrasoMin > 0 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>
+                          {item.atrasoMin === null ? "Aguardando" : item.atrasoMin > 0 ? "+" + formatDurationByUnit(item.atrasoMin) : "No horário"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Previsto: {formatDateTime(item.previstoEm)}</p>
+                      <p className="text-xs text-muted-foreground">Real: {formatDateTime(item.realizadoEm)}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-border/50">
+                <h3 className="text-sm font-semibold text-foreground">Custo por categoria</h3>
+              </div>
+              <div className="p-4 space-y-2">
+                {custosPorCategoria.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Sem custos categorizados.</p>
+                ) : (
+                  custosPorCategoria.map((item) => (
+                    <div key={item.categoria} className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">{item.categoria}</p>
+                        <p className="text-xs text-muted-foreground">{item.percentual.toFixed(1)}%</p>
+                      </div>
+                      <p className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(item.valor)}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         </TabsContent>
       </Tabs>
 

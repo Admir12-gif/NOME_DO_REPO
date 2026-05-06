@@ -298,32 +298,27 @@ export function RotasClient({ initialRotas, initialPostos }: RotasClientProps) {
   ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
-          <Route className="h-7 w-7 text-primary" />
-          Rotas
-        </h1>
-        <p className="text-muted-foreground">
-          Gerencie as rotas planejadas da sua transportadora
-        </p>
+    <div className="space-y-5">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Rotas</h1>
+          <p className="page-subtitle">Rotas cadastradas com origens, destinos e pontos intermediários</p>
+        </div>
       </div>
 
-      <Card className="border-border/50">
-        <CardContent className="pt-6">
-          <DataTable
-            data={rotas}
-            columns={columns}
-            searchKey="nome"
-            searchPlaceholder="Buscar rota..."
-            onAdd={handleAdd}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            addLabel="Nova Rota"
-            emptyMessage="Nenhuma rota cadastrada"
-          />
-        </CardContent>
-      </Card>
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm p-5">
+        <DataTable
+          data={rotas}
+          columns={columns}
+          searchKey="nome"
+          searchPlaceholder="Buscar por nome, origem, destino..."
+          onAdd={handleAdd}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          addLabel="Nova Rota"
+          emptyMessage="Nenhuma rota cadastrada"
+        />
+      </div>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">

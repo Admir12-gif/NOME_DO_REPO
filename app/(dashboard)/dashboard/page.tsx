@@ -1,88 +1,24 @@
 import { createClient } from "@/lib/supabase/server"
-import { AdvancedDashboardCharts } from "@/components/advanced-dashboard-charts"
 import { DashboardFilters } from "@/components/dashboard-filters"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-
-function monthKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
-}
-
-function formatMonthLabel(date: Date) {
-  return date
-    .toLocaleDateString("pt-BR", { month: "short", year: "2-digit" })
-    .replace(".", "")
-}
+import { DashboardAlerts } from "@/components/dashboard-alerts"
+import { formatCurrency, formatDate } from "@/lib/utils"
+import {
+  Truck,
+  Clock,
+  AlertTriangle,
+  TrendingUp,
+  CheckCircle2,
+  Route,
+  Calendar,
+  DollarSign,
+  ArrowRight,
+} from "lucide-react"
+import Link from "next/link"
 
 function normalizeViagemStatus(status?: string | null) {
   if (!status) return "Planejada"
   if (status === "Concluída") return "Concluida"
   return status
-}
-
-function normalizeCategoria(categoria?: string | null) {
-  if (!categoria) return "Outros"
-
-  const normalized = categoria
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase()
-    .trim()
-
-  if (normalized === "diesel") return "Diesel"
-  if (normalized === "pedagio") return "Pedagio"
-  if (normalized === "diarias") return "Diarias"
-  if (normalized === "comissao" || normalized === "comissao motorista") return "Comissao"
-  if (normalized === "arla") return "Arla"
-  return "Outros"
-}
-
-function getJoinedSingle<T>(record: T | T[] | null | undefined): T | null {
-  if (!record) return null
-  return Array.isArray(record) ? record[0] || null : record
-}
-
-function parseDateValue(value?: string | null) {
-  if (!value) return null
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function diffHours(start: Date, end: Date) {
-  return (end.getTime() - start.getTime()) / (1000 * 60 * 60)
-}
-
-function formatHours(value: number) {
-  if (!Number.isFinite(value)) return "-"
-  return `${value.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} h`
-}
-
-function formatCurrency(value: number) {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-    maximumFractionDigits: 0,
-  }).format(value)
-}
-
-interface PlanejamentoIntermediario {
-  cidade?: string | null
-  estado?: string | null
-  chegada_planejada?: string | null
-  chegada_real?: string | null
-}
-
-interface PlanejamentoRota {
-  origem_partida_planejada?: string | null
-  origem_partida_real?: string | null
-  destino_chegada_planejada?: string | null
-  destino_chegada_real?: string | null
-  intermediarios?: PlanejamentoIntermediario[] | null
-}
-
-interface SegmentPoint {
-  label: string
-  planned: Date | null
-  real: Date | null
 }
 
 type DashboardSearchParams = {
@@ -93,98 +29,6 @@ type DashboardSearchParams = {
   cliente?: string
   rota?: string
   carreta?: string
-  [key: string]: string | undefined
-}
-
-function readSearchParam(
-  params: DashboardSearchParams,
-  key: keyof DashboardSearchParams,
-) {
-  const value = params[key]
-  return typeof value === "string" ? value : ""
-}
-
-function toIsoStart(dateText?: string | null) {
-  if (!dateText) return null
-  const date = new Date(`${dateText}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return null
-  return date.toISOString()
-}
-
-function toIsoEnd(dateText?: string | null) {
-  if (!dateText) return null
-  const date = new Date(`${dateText}T23:59:59.999`)
-  if (Number.isNaN(date.getTime())) return null
-  return date.toISOString()
-}
-
-function buildMonthRange(start: Date, end: Date) {
-  const monthStart = new Date(start.getFullYear(), start.getMonth(), 1)
-  const monthEnd = new Date(end.getFullYear(), end.getMonth(), 1)
-  const list: { key: string; label: string }[] = []
-
-  const cursor = new Date(monthStart)
-  while (cursor <= monthEnd) {
-    list.push({
-      key: monthKey(cursor),
-      label: formatMonthLabel(cursor),
-    })
-    cursor.setMonth(cursor.getMonth() + 1)
-  }
-
-  if (list.length === 0) {
-    list.push({
-      key: monthKey(new Date()),
-      label: formatMonthLabel(new Date()),
-    })
-  }
-
-  return list
-}
-
-function getPeriodWindow(period: string, customFrom?: string, customTo?: string) {
-  const now = new Date()
-
-  if (period === "custom") {
-    const fromIso = toIsoStart(customFrom)
-    const toIso = toIsoEnd(customTo)
-    if (fromIso && toIso) {
-      return {
-        start: new Date(fromIso),
-        end: new Date(toIso),
-        label: `${new Date(fromIso).toLocaleDateString("pt-BR")} até ${new Date(toIso).toLocaleDateString("pt-BR")}`,
-      }
-    }
-  }
-
-  const periodDays: Record<string, number> = {
-    "30d": 30,
-    "90d": 90,
-  }
-
-  if (period in periodDays) {
-    const start = new Date(now)
-    start.setDate(now.getDate() - periodDays[period])
-    return {
-      start,
-      end: now,
-      label: `Últimos ${periodDays[period]} dias`,
-    }
-  }
-
-  const periodMonths: Record<string, number> = {
-    "6m": 6,
-    "12m": 12,
-  }
-  const months = periodMonths[period] || 6
-  const start = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1)
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
-
-  return {
-    start,
-    end,
-    label: `Últimos ${months} meses`,
-  }
 }
 
 export default async function DashboardPage({
@@ -194,588 +38,252 @@ export default async function DashboardPage({
 }) {
   const params = await searchParams
   const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
 
-  const period = readSearchParam(params, "period") || "6m"
-  const from = readSearchParam(params, "from")
-  const to = readSearchParam(params, "to")
-  const statusFilter = readSearchParam(params, "status")
-  const clienteIdFilter = readSearchParam(params, "cliente")
-  const rotaIdFilter = readSearchParam(params, "rota")
-  const carretaIdFilter = readSearchParam(params, "carreta")
+  const period = params.period || "6m"
+  const statusFilter = params.status || ""
 
-  const { start: rangeStart, end: rangeEnd, label: periodLabel } = getPeriodWindow(period, from, to)
+  const now = new Date()
+  const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1)
+  const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1)
 
-  const [clientesRes, rotasRes, veiculosRes] = await Promise.all([
-    supabase.from("clientes").select("id, nome").order("nome", { ascending: true }),
-    supabase.from("rotas").select("id, nome").order("nome", { ascending: true }),
-    supabase.from("veiculos").select("id, placa_cavalo, placa_carreta").order("placa_cavalo", { ascending: true }),
-  ])
-
-  let viagensQuery = supabase
+  const { data: viagens = [] } = await supabase
     .from("viagens")
-    .select("id, cliente_id, rota_id, veiculo_id, data_inicio, data_fim, valor_frete, km_real, volume_toneladas, status, eta_destino_em, atraso_estimado_minutos, planejamento_rota, cliente:clientes(nome), rota:rotas(nome, km_planejado), veiculo:veiculos(placa_cavalo, placa_carreta)")
-    .gte("data_inicio", rangeStart.toISOString())
-    .lte("data_inicio", rangeEnd.toISOString())
-
-  if (statusFilter) {
-    if (statusFilter === "Concluida") {
-      viagensQuery = viagensQuery.in("status", ["Concluida", "Concluída"])
-    } else {
-      viagensQuery = viagensQuery.eq("status", statusFilter)
-    }
-  }
-  if (clienteIdFilter) viagensQuery = viagensQuery.eq("cliente_id", clienteIdFilter)
-  if (rotaIdFilter) viagensQuery = viagensQuery.eq("rota_id", rotaIdFilter)
-  if (carretaIdFilter) viagensQuery = viagensQuery.eq("veiculo_id", carretaIdFilter)
-
-  const viagensRes = await viagensQuery
-
-  const viagens = viagensRes.data || []
-  const tripIds = viagens.map((viagem) => viagem.id)
-  const tripVehicleIds = Array.from(new Set(viagens.map((viagem) => viagem.veiculo_id).filter(Boolean))) as string[]
-  const effectiveVehicleIds = carretaIdFilter ? [carretaIdFilter] : tripVehicleIds
-  const hasTripFilters = Boolean(statusFilter || clienteIdFilter || rotaIdFilter || carretaIdFilter)
-
-  let custos: Array<{ data: string | null; categoria: string | null; valor: number | null }> = []
-  let abastecimentos: Array<{ litros: number | null; valor_total: number | null }> = []
-  let manutencoes: Array<{ custo: number | null }> = []
-
-  if (!hasTripFilters || tripIds.length > 0 || effectiveVehicleIds.length > 0) {
-    let custosQuery = supabase
-      .from("custos_viagem")
-      .select("data, categoria, valor, viagem_id")
-      .gte("data", rangeStart.toISOString().split("T")[0])
-      .lte("data", rangeEnd.toISOString().split("T")[0])
-
-    if (hasTripFilters) {
-      if (tripIds.length > 0) {
-        custosQuery = custosQuery.in("viagem_id", tripIds)
-      } else {
-        custosQuery = null as unknown as typeof custosQuery
-      }
-    }
-
-    let abastecimentosQuery = supabase
-      .from("abastecimentos")
-      .select("data, viagem_id, veiculo_id, litros, valor_total")
-      .gte("data", rangeStart.toISOString())
-      .lte("data", rangeEnd.toISOString())
-
-    if (hasTripFilters) {
-      if (tripIds.length > 0) {
-        abastecimentosQuery = abastecimentosQuery.in("viagem_id", tripIds)
-      } else if (carretaIdFilter) {
-        abastecimentosQuery = abastecimentosQuery.eq("veiculo_id", carretaIdFilter)
-      } else {
-        abastecimentosQuery = null as unknown as typeof abastecimentosQuery
-      }
-    }
-    if (carretaIdFilter && abastecimentosQuery) {
-      abastecimentosQuery = abastecimentosQuery.eq("veiculo_id", carretaIdFilter)
-    }
-
-    let manutencoesQuery = supabase
-      .from("manutencoes")
-      .select("data, veiculo_id, custo")
-      .gte("data", rangeStart.toISOString().split("T")[0])
-      .lte("data", rangeEnd.toISOString().split("T")[0])
-
-    if (hasTripFilters) {
-      if (effectiveVehicleIds.length > 0) {
-        manutencoesQuery = manutencoesQuery.in("veiculo_id", effectiveVehicleIds)
-      } else {
-        manutencoesQuery = null as unknown as typeof manutencoesQuery
-      }
-    }
-
-    const [custosRes, abastecimentosRes, manutencoesRes] = await Promise.all([
-      custosQuery ? custosQuery : Promise.resolve({ data: [] as never[] }),
-      abastecimentosQuery ? abastecimentosQuery : Promise.resolve({ data: [] as never[] }),
-      manutencoesQuery ? manutencoesQuery : Promise.resolve({ data: [] as never[] }),
-    ])
-
-    custos = (custosRes.data || []) as Array<{ data: string | null; categoria: string | null; valor: number | null }>
-    abastecimentos = (abastecimentosRes.data || []) as Array<{ litros: number | null; valor_total: number | null }>
-    manutencoes = (manutencoesRes.data || []) as Array<{ custo: number | null }>
-  }
-
-  const months = buildMonthRange(rangeStart, rangeEnd)
-
-  const statusOptions = [
-    { value: "Planejada", label: "Planejada" },
-    { value: "Em andamento", label: "Em andamento" },
-    { value: "Concluida", label: "Concluída" },
-    { value: "Cancelada", label: "Cancelada" },
-  ]
-
-  const clienteOptions = (clientesRes.data || []).map((cliente) => ({
-    value: cliente.id,
-    label: cliente.nome || "Sem nome",
-  }))
-  const rotaOptions = (rotasRes.data || []).map((rota) => ({
-    value: rota.id,
-    label: rota.nome || "Sem nome",
-  }))
-  const carretaOptions = (veiculosRes.data || []).map((veiculo) => ({
-    value: veiculo.id,
-    label: veiculo.placa_carreta || veiculo.placa_cavalo || "Sem placa",
-  }))
-
-  const revenueByMonth = new Map(months.map((m) => [m.key, 0]))
-  const costsByMonth = new Map(months.map((m) => [m.key, 0]))
-  const tripsByMonth = new Map(months.map((m) => [m.key, 0]))
-  const kmByMonth = new Map(months.map((m) => [m.key, 0]))
-  const volumeByMonth = new Map(months.map((m) => [m.key, 0]))
-
-  viagens.forEach((viagem) => {
-    if (!viagem.data_inicio) return
-    const key = monthKey(new Date(viagem.data_inicio))
-    revenueByMonth.set(key, (revenueByMonth.get(key) || 0) + (viagem.valor_frete || 0))
-    tripsByMonth.set(key, (tripsByMonth.get(key) || 0) + 1)
-    kmByMonth.set(key, (kmByMonth.get(key) || 0) + (viagem.km_real || 0))
-    volumeByMonth.set(key, (volumeByMonth.get(key) || 0) + (viagem.volume_toneladas || 0))
-  })
-
-  const custosMensaisPorCategoria: Record<string, Record<string, number>> = {}
-
-  custos.forEach((custo) => {
-    if (!custo.data) return
-    const key = monthKey(new Date(custo.data))
-    const categoria = normalizeCategoria(custo.categoria)
-    costsByMonth.set(key, (costsByMonth.get(key) || 0) + (custo.valor || 0))
-    if (!custosMensaisPorCategoria[key]) custosMensaisPorCategoria[key] = {}
-    custosMensaisPorCategoria[key][categoria] = (custosMensaisPorCategoria[key][categoria] || 0) + (custo.valor || 0)
-  })
-
-  const monthlySeries = months.map((month) => ({
-    month: month.label,
-    faturamento: revenueByMonth.get(month.key) || 0,
-    custos: costsByMonth.get(month.key) || 0,
-  }))
-
-  const tripsSeries = months.map((month) => ({
-    month: month.label,
-    viagens: tripsByMonth.get(month.key) || 0,
-  }))
-
-  const ticketSeries = months.map((month) => {
-    const trips = tripsByMonth.get(month.key) || 0
-    const revenue = revenueByMonth.get(month.key) || 0
-    return {
-      month: month.label,
-      ticket: trips > 0 ? revenue / trips : 0,
-    }
-  })
-
-  const kmSeries = months.map((month) => {
-    const trips = tripsByMonth.get(month.key) || 0
-    const km = kmByMonth.get(month.key) || 0
-    return {
-      month: month.label,
-      km_medio: trips > 0 ? km / trips : 0,
-    }
-  })
-
-  const volumeSeries = months.map((month) => ({
-    month: month.label,
-    volume: volumeByMonth.get(month.key) || 0,
-  }))
-
-  const margemSeries = months.map((month) => ({
-    month: month.label,
-    margem: (revenueByMonth.get(month.key) || 0) - (costsByMonth.get(month.key) || 0),
-  }))
-
-  const custosPorCategoria = custos.reduce((acc, c) => {
-    const categoria = normalizeCategoria(c.categoria)
-    acc[categoria] = (acc[categoria] || 0) + (c.valor || 0)
-    return acc
-  }, {} as Record<string, number>)
-
-  const pieSeries = Object.entries(custosPorCategoria).map(([categoria, valor]) => ({
-    categoria,
-    valor,
-  }))
-
-  const statusSeries = Object.entries(
-    viagens.reduce((acc, v) => {
-      const status = normalizeViagemStatus(v.status)
-      acc[status] = (acc[status] || 0) + 1
-      return acc
-    }, {} as Record<string, number>),
-  ).map(([status, valor]) => ({ status, valor }))
-
-  const faturamentoTotal = viagens.reduce((sum, v) => sum + (v.valor_frete || 0), 0)
-  const custosViagemTotal = custos.reduce((sum, c) => sum + (c.valor || 0), 0)
-  const custoAbastecimentoTotal = abastecimentos.reduce((sum, a) => sum + (a.valor_total || 0), 0)
-  const custoManutencaoTotal = manutencoes.reduce((sum, m) => sum + (m.custo || 0), 0)
-  const custoOperacionalTotal = custosViagemTotal + custoAbastecimentoTotal + custoManutencaoTotal
-  const lucroOperacional = faturamentoTotal - custoOperacionalTotal
+    .select(`id, status, valor_frete, eta_destino_em, atraso_estimado_minutos, data_inicio, data_fim, origem_real, destino_real, tipo_carga,
+      cliente:clientes(nome), motorista:motoristas(nome), veiculo:veiculos(placa_cavalo)`)
+    .gte("data_inicio", sixMonthsAgo.toISOString())
+    .lte("data_inicio", now.toISOString())
+    .order("data_inicio", { ascending: false })
 
   const viagensEmAndamento = viagens.filter((v) => normalizeViagemStatus(v.status) === "Em andamento")
+  const viagensPlanejadas = viagens.filter((v) => normalizeViagemStatus(v.status) === "Planejada")
+  const viagensConcluidas = viagens.filter((v) => normalizeViagemStatus(v.status) === "Concluida")
+
+  const proximoEta = viagensEmAndamento
+    .filter((v) => v.eta_destino_em)
+    .sort((a, b) => new Date(a.eta_destino_em || 0).getTime() - new Date(b.eta_destino_em || 0).getTime())[0]
+
   const comAtraso = viagensEmAndamento.filter((v) => (v.atraso_estimado_minutos || 0) > 0)
   const atrasoMedioMin = comAtraso.length > 0
     ? Math.round(comAtraso.reduce((sum, v) => sum + (v.atraso_estimado_minutos || 0), 0) / comAtraso.length)
     : 0
-  const proximosEta = viagensEmAndamento
-    .filter((v) => v.eta_destino_em)
-    .sort((a, b) => new Date(a.eta_destino_em || 0).getTime() - new Date(b.eta_destino_em || 0).getTime())
-    .slice(0, 1)[0]
 
-  const waterfallSeries = [
-    { etapa: "Faturamento", base: 0, valor: faturamentoTotal },
-    { etapa: "Custos", base: faturamentoTotal, valor: -custoOperacionalTotal },
-    { etapa: "Lucro", base: 0, valor: lucroOperacional },
-  ]
+  const faturamentoTotal = viagens.reduce((sum, v) => sum + (v.valor_frete || 0), 0)
+  const faturamentoMes = viagens
+    .filter((v) => v.data_inicio && new Date(v.data_inicio) >= thisMonthStart)
+    .reduce((sum, v) => sum + (v.valor_frete || 0), 0)
 
-  const stackedMonths = months.slice(-4)
-  const categoryOrder = ["Diesel", "Pedagio", "Diarias", "Comissao", "Arla", "Outros"]
-  const stackedCategories = Array.from(
-    new Set([
-      ...categoryOrder,
-      ...custos.map((c) => normalizeCategoria(c.categoria)),
-    ]),
-  )
-
-  const stackedSeries = stackedMonths.map((month) => {
-    const monthData = custosMensaisPorCategoria[month.key] || {}
-    const base: { month: string; [key: string]: number | string } = { month: month.label }
-    stackedCategories.forEach((categoria) => {
-      base[categoria] = monthData[categoria] || 0
-    })
-    return base
-  })
-
-  const topClients = Object.entries(
-    viagens.reduce((acc, v) => {
-      const cliente = getJoinedSingle(v.cliente)
-      const nome = cliente?.nome || "Sem cliente"
-      acc[nome] = (acc[nome] || 0) + (v.valor_frete || 0)
-      return acc
-    }, {} as Record<string, number>),
-  )
-    .map(([cliente, valor]) => ({ cliente, valor }))
-    .sort((a, b) => b.valor - a.valor)
-    .slice(0, 8)
-
-  const topRoutes = Object.entries(
-    viagens.reduce((acc, v) => {
-      const rota = getJoinedSingle(v.rota)
-      const nome = rota?.nome || "Rota avulsa"
-      acc[nome] = (acc[nome] || 0) + (v.valor_frete || 0)
-      return acc
-    }, {} as Record<string, number>),
-  )
-    .map(([rota, valor]) => ({ rota, valor }))
-    .sort((a, b) => b.valor - a.valor)
-    .slice(0, 8)
-
-  const cicloPorCarreta = Object.entries(
-    viagens.reduce((acc, viagem) => {
-      if (!viagem.data_inicio || !viagem.data_fim) return acc
-      const inicio = parseDateValue(viagem.data_inicio)
-      const fim = parseDateValue(viagem.data_fim)
-      if (!inicio || !fim || fim <= inicio) return acc
-      const veiculo = getJoinedSingle(viagem.veiculo)
-      const carreta = veiculo?.placa_carreta || veiculo?.placa_cavalo || "Sem placa"
-      if (!acc[carreta]) {
-        acc[carreta] = { carreta, totalHoras: 0, viagens: 0 }
-      }
-      acc[carreta].totalHoras += diffHours(inicio, fim)
-      acc[carreta].viagens += 1
-      return acc
-    }, {} as Record<string, { carreta: string; totalHoras: number; viagens: number }>),
-  )
-    .map(([, value]) => ({
-      carreta: value.carreta,
-      mediaHoras: value.viagens > 0 ? value.totalHoras / value.viagens : 0,
-      viagens: value.viagens,
-    }))
-    .sort((a, b) => b.viagens - a.viagens)
-    .slice(0, 8)
-
-  const trechoStats = viagens.reduce((acc, viagem) => {
-    const planejamento = (viagem.planejamento_rota || null) as PlanejamentoRota | null
-    if (!planejamento) return acc
-
-    const points: SegmentPoint[] = [
-      {
-        label: "Origem",
-        planned: parseDateValue(planejamento.origem_partida_planejada),
-        real: parseDateValue(planejamento.origem_partida_real || viagem.data_inicio),
-      },
-    ]
-
-    ;(planejamento.intermediarios || []).forEach((intermediario, index) => {
-      const cidade = intermediario?.cidade || `Ponto ${index + 1}`
-      const estado = intermediario?.estado ? `/${intermediario.estado}` : ""
-      points.push({
-        label: `${cidade}${estado}`,
-        planned: parseDateValue(intermediario.chegada_planejada),
-        real: parseDateValue(intermediario.chegada_real),
-      })
-    })
-
-    points.push({
-      label: "Destino",
-      planned: parseDateValue(planejamento.destino_chegada_planejada),
-      real: parseDateValue(planejamento.destino_chegada_real || viagem.data_fim),
-    })
-
-    for (let index = 1; index < points.length; index += 1) {
-      const previous = points[index - 1]
-      const current = points[index]
-      const key = `${previous.label} -> ${current.label}`
-      if (!acc[key]) {
-        acc[key] = { trecho: key, plannedHoras: 0, realHoras: 0, plannedCount: 0, realCount: 0 }
-      }
-      if (previous.planned && current.planned && current.planned > previous.planned) {
-        acc[key].plannedHoras += diffHours(previous.planned, current.planned)
-        acc[key].plannedCount += 1
-      }
-      if (previous.real && current.real && current.real > previous.real) {
-        acc[key].realHoras += diffHours(previous.real, current.real)
-        acc[key].realCount += 1
-      }
-    }
-
-    return acc
-  }, {} as Record<string, { trecho: string; plannedHoras: number; realHoras: number; plannedCount: number; realCount: number }>)
-
-  const transitoPorTrecho = Object.values(trechoStats)
-    .map((item) => {
-      const planejadoMedio = item.plannedCount > 0 ? item.plannedHoras / item.plannedCount : null
-      const realizadoMedio = item.realCount > 0 ? item.realHoras / item.realCount : null
-      const variacaoPerc = planejadoMedio && realizadoMedio
-        ? ((realizadoMedio - planejadoMedio) / planejadoMedio) * 100
-        : null
-      return {
-        trecho: item.trecho,
-        planejadoMedio,
-        realizadoMedio,
-        variacaoPerc,
-        base: Math.max(item.plannedCount, item.realCount),
-      }
-    })
-    .sort((a, b) => b.base - a.base)
-    .slice(0, 8)
-
-  const kmPlanejadoTotal = viagens.reduce((sum, viagem) => {
-    const rota = getJoinedSingle(viagem.rota)
-    return sum + (rota?.km_planejado || 0)
-  }, 0)
-  const kmRealTotal = viagens.reduce((sum, viagem) => sum + (viagem.km_real || 0), 0)
-  const desvioKm = kmRealTotal - kmPlanejadoTotal
-  const eficienciaPlanejadoReal = kmPlanejadoTotal > 0 ? (kmRealTotal / kmPlanejadoTotal) * 100 : 0
-
-  const viagemComDestinoPlanejado = viagens.filter((viagem) => {
-    const planejamento = (viagem.planejamento_rota || null) as PlanejamentoRota | null
-    return Boolean(planejamento?.destino_chegada_planejada)
-  })
-
-  const pontualidadeDestino = viagemComDestinoPlanejado.length > 0
-    ? (viagemComDestinoPlanejado.filter((viagem) => {
-      const planejamento = (viagem.planejamento_rota || null) as PlanejamentoRota | null
-      const planejado = parseDateValue(planejamento?.destino_chegada_planejada || null)
-      const realizado = parseDateValue(planejamento?.destino_chegada_real || viagem.data_fim)
-      if (!planejado || !realizado) return false
-      return realizado <= planejado
-    }).length / viagemComDestinoPlanejado.length) * 100
+  const taxaConclusao = viagens.length > 0
+    ? Math.round((viagensConcluidas.length / viagens.length) * 100)
     : 0
 
-  const litrosTotais = abastecimentos.reduce((sum, abastecimento) => sum + (abastecimento.litros || 0), 0)
-  const consumoMedioKmLitro = litrosTotais > 0 ? kmRealTotal / litrosTotais : 0
-  const custoPorKm = kmRealTotal > 0 ? custoOperacionalTotal / kmRealTotal : 0
-  const custoCombustivelPerc = custoOperacionalTotal > 0 ? (custoAbastecimentoTotal / custoOperacionalTotal) * 100 : 0
+  const recentes = viagens.slice(0, 6)
+
+  const kpis = [
+    {
+      label: "Em Andamento",
+      value: viagensEmAndamento.length,
+      icon: Truck,
+      color: "bg-blue-500",
+      bg: "bg-blue-50 border-blue-100",
+      textColor: "text-blue-700",
+      sub: "viagens ativas agora",
+      href: "/viagens",
+    },
+    {
+      label: "Planejadas",
+      value: viagensPlanejadas.length,
+      icon: Calendar,
+      color: "bg-amber-500",
+      bg: "bg-amber-50 border-amber-100",
+      textColor: "text-amber-700",
+      sub: "aguardando início",
+      href: "/viagens",
+    },
+    {
+      label: "Faturamento do Mês",
+      value: formatCurrency(faturamentoMes),
+      icon: DollarSign,
+      color: "bg-emerald-500",
+      bg: "bg-emerald-50 border-emerald-100",
+      textColor: "text-emerald-700",
+      sub: "receita no mês atual",
+      href: "/financeiro/receber",
+    },
+    {
+      label: "Taxa de Conclusão",
+      value: `${taxaConclusao}%`,
+      icon: CheckCircle2,
+      color: "bg-violet-500",
+      bg: "bg-violet-50 border-violet-100",
+      textColor: "text-violet-700",
+      sub: `${viagensConcluidas.length} de ${viagens.length} viagens`,
+      href: "/viagens",
+    },
+  ]
+
+  const statusConfig: Record<string, { label: string; className: string }> = {
+    "Em andamento": { label: "Em Andamento", className: "badge-andamento" },
+    Planejada: { label: "Planejada", className: "badge-planejada" },
+    Concluida: { label: "Concluída", className: "badge-concluida" },
+    Cancelada: { label: "Cancelada", className: "badge-cancelada" },
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Painel</h1>
-        <p className="text-muted-foreground">
-          Visão operacional e analítica integrada de {periodLabel}
-        </p>
+      {/* Page Header */}
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Painel Operacional</h1>
+          <p className="page-subtitle">
+            {sixMonthsAgo.toLocaleDateString("pt-BR", { month: "short", year: "numeric" })}
+            {" — "}
+            {now.toLocaleDateString("pt-BR", { day: "numeric", month: "short", year: "numeric" })}
+          </p>
+        </div>
+        <Link
+          href="/viagens"
+          className="hidden sm:inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+        >
+          Ver todas as viagens
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
       </div>
 
-      <DashboardFilters
-        period={period}
-        from={from}
-        to={to}
-        status={statusFilter}
-        clienteId={clienteIdFilter}
-        rotaId={rotaIdFilter}
-        carretaId={carretaIdFilter}
-        statusOptions={statusOptions}
-        clienteOptions={clienteOptions}
-        rotaOptions={rotaOptions}
-        carretaOptions={carretaOptions}
-      />
+      {/* Filters */}
+      <DashboardFilters period={period} />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Viagens em andamento</p>
-            <p className="text-2xl font-semibold">{viagensEmAndamento.length}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">ETA mais próximo</p>
-            <p className="text-lg font-semibold">
-              {proximosEta?.eta_destino_em
-                ? new Date(proximosEta.eta_destino_em).toLocaleString("pt-BR", {
-                  day: "2-digit",
-                  month: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })
-                : "-"}
+      {/* Alerts */}
+      {user && <DashboardAlerts userId={user.id} />}
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        {kpis.map((kpi) => (
+          <Link
+            key={kpi.label}
+            href={kpi.href}
+            className={`kpi-card border card-interactive group ${kpi.bg}`}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <div className={`h-9 w-9 rounded-lg ${kpi.color} flex items-center justify-center shadow-sm`}>
+                <kpi.icon className="h-4.5 w-4.5 text-white h-[18px] w-[18px]" />
+              </div>
+              <ArrowRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+            <p className="kpi-card-value tabular">{kpi.value}</p>
+            <p className={`text-xs font-semibold mt-1 ${kpi.textColor}`}>{kpi.label}</p>
+            <p className="kpi-card-label mt-0.5">{kpi.sub}</p>
+          </Link>
+        ))}
+      </div>
+
+      {/* Secondary Metrics */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Próximo ETA */}
+        <div className="kpi-card border border-border/60 flex items-center gap-4">
+          <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+            <Clock className="h-5 w-5 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <p className="kpi-card-label">Próximo ETA</p>
+            <p className="text-base font-bold text-foreground tabular truncate">
+              {proximoEta ? formatDate(proximoEta.eta_destino_em) : "—"}
             </p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Atraso médio estimado</p>
-            <p className={atrasoMedioMin > 0 ? "text-2xl font-semibold text-destructive" : "text-2xl font-semibold"}>
+            <p className="text-xs text-muted-foreground">próxima chegada esperada</p>
+          </div>
+        </div>
+
+        {/* Atraso médio */}
+        <div className={`kpi-card border flex items-center gap-4 ${atrasoMedioMin > 0 ? "border-amber-200 bg-amber-50" : "border-border/60"}`}>
+          <div className={`h-10 w-10 rounded-lg flex items-center justify-center flex-shrink-0 ${atrasoMedioMin > 0 ? "bg-amber-500" : "bg-muted"}`}>
+            <AlertTriangle className={`h-5 w-5 ${atrasoMedioMin > 0 ? "text-white" : "text-muted-foreground"}`} />
+          </div>
+          <div className="min-w-0">
+            <p className="kpi-card-label">Atraso Médio</p>
+            <p className={`text-base font-bold tabular ${atrasoMedioMin > 0 ? "text-amber-700" : "text-foreground"}`}>
               {atrasoMedioMin > 0 ? `+${atrasoMedioMin} min` : "No prazo"}
             </p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Lucro operacional</p>
-            <p className={lucroOperacional >= 0 ? "text-2xl font-semibold" : "text-2xl font-semibold text-destructive"}>
-              {formatCurrency(lucroOperacional)}
+            <p className="text-xs text-muted-foreground">
+              {comAtraso.length} viagem(ns) atrasada(s)
             </p>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">KM planejado</p>
-            <p className="text-xl font-semibold">{kmPlanejadoTotal.toLocaleString("pt-BR")} km</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">KM realizado</p>
-            <p className="text-xl font-semibold">{kmRealTotal.toLocaleString("pt-BR")} km</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Desvio de KM</p>
-            <p className={desvioKm <= 0 ? "text-xl font-semibold" : "text-xl font-semibold text-destructive"}>
-              {desvioKm >= 0 ? "+" : ""}{desvioKm.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} km
+        {/* Faturamento total */}
+        <div className="kpi-card border border-emerald-200 bg-emerald-50 flex items-center gap-4">
+          <div className="h-10 w-10 rounded-lg bg-emerald-500 flex items-center justify-center flex-shrink-0">
+            <TrendingUp className="h-5 w-5 text-white" />
+          </div>
+          <div className="min-w-0">
+            <p className="kpi-card-label">Faturamento Total</p>
+            <p className="text-base font-bold text-emerald-700 tabular truncate">
+              {formatCurrency(faturamentoTotal)}
             </p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Realizado vs planejado</p>
-            <p className="text-xl font-semibold">{eficienciaPlanejadoReal.toFixed(1)}%</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Pontualidade no destino</p>
-            <p className="text-xl font-semibold">{pontualidadeDestino.toFixed(1)}%</p>
-          </CardContent>
-        </Card>
+            <p className="text-xs text-muted-foreground">últimos 6 meses</p>
+          </div>
+        </div>
       </div>
 
-      <AdvancedDashboardCharts
-        monthlySeries={monthlySeries}
-        pieSeries={pieSeries}
-        waterfallSeries={waterfallSeries}
-        stackedSeries={stackedSeries}
-        stackedCategories={stackedCategories}
-        topClients={topClients}
-        tripsSeries={tripsSeries}
-        ticketSeries={ticketSeries}
-        kmSeries={kmSeries}
-        volumeSeries={volumeSeries}
-        margemSeries={margemSeries}
-        statusSeries={statusSeries}
-        topRoutes={topRoutes}
-      />
+      {/* Recent Trips */}
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border/60">
+          <div className="flex items-center gap-2">
+            <Route className="h-4 w-4 text-primary" />
+            <h2 className="font-semibold text-sm text-foreground">Viagens Recentes</h2>
+          </div>
+          <Link href="/viagens" className="text-xs text-primary hover:text-primary/80 font-medium transition-colors flex items-center gap-1">
+            Ver tudo <ArrowRight className="h-3 w-3" />
+          </Link>
+        </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <Card className="border-border/50">
-          <CardHeader>
-            <CardTitle className="text-lg">Tempo de ciclo por carreta</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {cicloPorCarreta.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Sem viagens concluídas com início e fim no período.</p>
-            ) : (
-              cicloPorCarreta.map((item) => (
-                <div key={item.carreta} className="flex items-center justify-between rounded-lg border border-border/50 p-3">
-                  <div>
-                    <p className="text-sm font-medium">{item.carreta}</p>
-                    <p className="text-xs text-muted-foreground">{item.viagens} viagem(ns)</p>
+        {recentes.length > 0 ? (
+          <div className="divide-y divide-border/60">
+            {recentes.map((v: any) => {
+              const statusNorm = normalizeViagemStatus(v.status)
+              const config = statusConfig[statusNorm] || { label: statusNorm, className: "badge-planejada" }
+
+              return (
+                <Link
+                  key={v.id}
+                  href={`/viagens/${v.id}`}
+                  className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/40 transition-colors group"
+                >
+                  <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 group-hover:bg-primary/15 transition-colors">
+                    <Truck className="h-4 w-4 text-primary" />
                   </div>
-                  <p className="text-sm font-semibold">{formatHours(item.mediaHoras)}</p>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/50">
-          <CardHeader>
-            <CardTitle className="text-lg">Trânsito médio entre pontos</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {transitoPorTrecho.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Sem dados suficientes de planejado/real por trecho.</p>
-            ) : (
-              transitoPorTrecho.map((item) => (
-                <div key={item.trecho} className="rounded-lg border border-border/50 p-3">
-                  <p className="text-sm font-medium">{item.trecho}</p>
-                  <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                    <span>Planejado: {item.planejadoMedio ? formatHours(item.planejadoMedio) : "-"}</span>
-                    <span>Realizado: {item.realizadoMedio ? formatHours(item.realizadoMedio) : "-"}</span>
-                    <span>
-                      Variação: {item.variacaoPerc !== null
-                        ? `${item.variacaoPerc >= 0 ? "+" : ""}${item.variacaoPerc.toFixed(1)}%`
-                        : "-"}
-                    </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm font-medium text-foreground truncate">
+                        {v.tipo_carga || "—"}
+                      </p>
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border ${config.className} flex-shrink-0`}>
+                        {config.label}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {v.origem_real || "—"} → {v.destino_real || "—"}
+                      {v.motorista?.nome && ` · ${v.motorista.nome}`}
+                    </p>
                   </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Custo por KM</p>
-            <p className="text-xl font-semibold">{formatCurrency(custoPorKm)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Consumo médio (km/L)</p>
-            <p className="text-xl font-semibold">{consumoMedioKmLitro.toFixed(2)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Peso de combustível no custo</p>
-            <p className="text-xl font-semibold">{custoCombustivelPerc.toFixed(1)}%</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Custo operacional total</p>
-            <p className="text-xl font-semibold">{formatCurrency(custoOperacionalTotal)}</p>
-          </CardContent>
-        </Card>
+                  <div className="text-right flex-shrink-0 hidden sm:block">
+                    <p className="text-sm font-semibold text-foreground tabular">
+                      {v.valor_frete ? formatCurrency(v.valor_frete) : "—"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatDate(v.data_inicio)}
+                    </p>
+                  </div>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                </Link>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="py-12 text-center">
+            <Route className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">Nenhuma viagem no período</p>
+          </div>
+        )}
       </div>
     </div>
   )

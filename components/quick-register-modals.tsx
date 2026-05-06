@@ -499,7 +499,7 @@ export function QuickRotaModal({
                     </div>
                     <div className="grid gap-1">
                       <Label className="text-xs">Obs.</Label>
-                      <Input value={ponto.observacao || ""} onChange={(e) => updatePonto(index, "observacao", e.target.value)} placeholder="Parada, descarga..." />
+                      <Input value={ponto.observacao || ""} onChange={(e) => updatePonto(index, "observacao", e.target.value)} placeholder="Observações" />
                     </div>
                   </div>
                 </div>

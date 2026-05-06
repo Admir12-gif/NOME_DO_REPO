@@ -7,12 +7,12 @@ export const metadata = {
 
 export default function ManutencoesPage() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Manutencoes</h1>
-        <p className="text-muted-foreground">
-          Registre e acompanhe as manutencoes preventivas e corretivas
-        </p>
+    <div className="space-y-5">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Manutenções</h1>
+          <p className="page-subtitle">Histórico e programação de manutenções da frota</p>
+        </div>
       </div>
       <ManutencoesClient />
     </div>

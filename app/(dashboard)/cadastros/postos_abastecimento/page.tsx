@@ -159,15 +159,15 @@ export default function PostosAbastecimentoPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5">
+      <div className="page-header">
         <div>
-          <h1 className="text-3xl font-bold">Postos de Abastecimento</h1>
-          <p className="text-muted-foreground mt-1">Cadastro de locais de abastecimento</p>
+          <h1 className="page-title">Postos de Abastecimento</h1>
+          <p className="page-subtitle">Locais de abastecimento vinculados às rotas</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
           <DialogTrigger asChild>
-            <Button className="gap-2">
+            <Button size="sm" className="gap-1.5">
               <Plus className="w-4 h-4" />
               Novo Posto
             </Button>
@@ -223,63 +223,52 @@ export default function PostosAbastecimentoPage() {
         </Dialog>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Lista de Postos</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <p className="text-muted-foreground">Carregando...</p>
-          ) : postos.length === 0 ? (
-            <p className="text-muted-foreground">Nenhum posto cadastrado</p>
-          ) : (
-            <div className="rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Localidade</TableHead>
-                    <TableHead>Referência</TableHead>
-                    <TableHead className="text-right w-20">Ações</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {postos.map((posto) => (
-                    <TableRow key={posto.id}>
-                      <TableCell className="font-medium">{posto.nome}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {posto.localidade || "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
-                        {posto.referencia || "—"}
-                      </TableCell>
-                      <TableCell className="flex gap-1 justify-end">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleEdit(posto)}
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setSelectedPostoId(posto.id)
-                            setDeleteDialogOpen(true)
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+        {isLoading ? (
+          <div className="py-12 text-center">
+            <div className="h-6 w-6 rounded-full border-2 border-primary/30 border-t-primary animate-spin mx-auto" />
+          </div>
+        ) : postos.length === 0 ? (
+          <div className="py-14 text-center">
+            <p className="text-sm text-muted-foreground font-medium">Nenhum posto cadastrado</p>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-border/60 hover:bg-transparent">
+                <TableHead className="h-10 px-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/30">Nome</TableHead>
+                <TableHead className="h-10 px-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/30">Localidade</TableHead>
+                <TableHead className="h-10 px-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/30">Referência</TableHead>
+                <TableHead className="w-20 bg-muted/30" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {postos.map((posto) => (
+                <TableRow key={posto.id} className="border-b border-border/40 hover:bg-primary/5 transition-colors">
+                  <TableCell className="px-4 py-3 text-sm font-medium">{posto.nome}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-muted-foreground">
+                    {posto.localidade || "—"}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-muted-foreground max-w-xs truncate">
+                    {posto.referencia || "—"}
+                  </TableCell>
+                  <TableCell className="px-2 py-2">
+                    <div className="flex gap-1 justify-end">
+                      <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => handleEdit(posto)}>
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        onClick={() => { setSelectedPostoId(posto.id); setDeleteDialogOpen(true) }}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>

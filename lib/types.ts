@@ -364,3 +364,112 @@ export interface DashboardKPIs {
   veiculos_ativos: number
   manutencoes_pendentes: number
 }
+
+// Motorista Comissões
+export interface MotoristaComissao {
+  id: string
+  user_id: string
+  motorista_id: string
+  percentual_comissao: number
+  tipo_comissao: 'Fixa' | 'Variavel'
+  ativo: boolean
+  observacao: string | null
+  created_at: string
+  updated_at: string
+  // Joined fields
+  motorista?: Motorista
+}
+
+export interface MotoristaComissaoAuditoria {
+  id: string
+  user_id: string
+  motorista_id: string
+  viagem_id: string | null
+  valor_frete: number
+  percentual_aplicado: number
+  valor_comissao: number
+  data_calculo: string
+  contas_pagar_id: string | null
+}
+
+// Alertas Automáticos
+export type TipoAlerta = 'Manutencao vencida' | 'Viagem atrasada' | 'Combustivel baixo' | 'Documento vencido'
+export type EntidadeTipo = 'Veiculo' | 'Viagem' | 'Motorista'
+export type AlertaSeverity = 'critico' | 'alto' | 'normal' | 'info'
+
+export interface Alerta {
+  id: string
+  user_id: string
+  tipo_alerta: TipoAlerta
+  entidade_tipo: EntidadeTipo
+  entidade_id: string
+  titulo: string
+  descricao: string | null
+  severity: AlertaSeverity
+  resolvido: boolean
+  data_resolucao: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface NotificacaoAlerta {
+  id: string
+  user_id: string
+  alerta_id: string
+  tipo_notificacao: 'Email' | 'SMS' | 'Push' | 'In-app'
+  enviado: boolean
+  data_envio: string | null
+  created_at: string
+}
+
+// Acerto de Caixa
+export interface AcertoCaixa {
+  id: string
+  user_id: string
+  conta_receber_id: string | null
+  conta_pagar_id: string | null
+  data_acerto: string
+  valor_acertado: number
+  saldo_pendente: number
+  observacao: string | null
+  status: 'Acertado' | 'Parcial' | 'Revertido'
+  acertado_por: string | null
+  created_at: string
+  updated_at: string
+  // Joined fields
+  conta_receber?: ContaReceber
+  conta_pagar?: ContaPagar
+}
+
+// Combustível Control
+export interface CartaoCombustivel {
+  id: string
+  user_id: string
+  numero_cartao: string
+  veiculo_id: string
+  bandeira: string | null
+  data_validade: string | null
+  limite_mensal: number
+  saldo_disponivel: number
+  ativo: boolean
+  observacao: string | null
+  created_at: string
+  updated_at: string
+  // Joined fields
+  veiculo?: Veiculo
+}
+
+export interface CombustivelLimite {
+  id: string
+  user_id: string
+  veiculo_id: string
+  limite_diario: number
+  limite_semanal: number
+  limite_mensal: number
+  alerta_percentual: number
+  ativo: boolean
+  created_at: string
+  updated_at: string
+  // Joined fields
+  veiculo?: Veiculo
+}

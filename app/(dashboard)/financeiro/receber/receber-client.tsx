@@ -271,52 +271,41 @@ export function ContasReceberClient({
   ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
-          <ArrowUpRight className="h-7 w-7 text-success" />
-          Contas a Receber
-        </h1>
-        <p className="text-muted-foreground">
-          Gerencie os recebimentos da sua transportadora
-        </p>
+    <div className="space-y-5">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Contas a Receber</h1>
+          <p className="page-subtitle">Controle de recebimentos e inadimplência</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        <Card className="border-warning/30 bg-warning/5">
-          <CardContent className="p-4">
-            <p className="text-sm text-muted-foreground">Em Aberto</p>
-            <p className="text-2xl font-bold text-warning-foreground">{formatCurrency(totalEmAberto)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-success/30 bg-success/5">
-          <CardContent className="p-4">
-            <p className="text-sm text-muted-foreground">Recebido</p>
-            <p className="text-2xl font-bold text-success">{formatCurrency(totalRecebido)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-destructive/30 bg-destructive/5">
-          <CardContent className="p-4">
-            <p className="text-sm text-muted-foreground">Atrasado</p>
-            <p className="text-2xl font-bold text-destructive">{formatCurrency(totalAtrasado)}</p>
-          </CardContent>
-        </Card>
+        <div className="kpi-card border border-amber-200 bg-amber-50">
+          <p className="kpi-card-label mb-2">Em Aberto</p>
+          <p className="text-xl font-bold text-amber-700 tabular">{formatCurrency(totalEmAberto)}</p>
+        </div>
+        <div className="kpi-card border border-emerald-200 bg-emerald-50">
+          <p className="kpi-card-label mb-2">Recebido</p>
+          <p className="text-xl font-bold text-emerald-700 tabular">{formatCurrency(totalRecebido)}</p>
+        </div>
+        <div className="kpi-card border border-rose-200 bg-rose-50">
+          <p className="kpi-card-label mb-2">Atrasado</p>
+          <p className="text-xl font-bold text-rose-700 tabular">{formatCurrency(totalAtrasado)}</p>
+        </div>
       </div>
 
-      <Card className="border-border/50">
-        <CardContent className="pt-6">
-          <DataTable
-            data={contas}
-            columns={columns}
-            searchPlaceholder="Buscar conta..."
-            onAdd={handleAdd}
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm p-5">
+        <DataTable
+          data={contas}
+          columns={columns}
+          searchPlaceholder="Buscar conta..."
+          onAdd={handleAdd}
             onEdit={handleEdit}
             onDelete={handleDelete}
             addLabel="Nova Conta"
             emptyMessage="Nenhuma conta a receber"
           />
-        </CardContent>
-      </Card>
+      </div>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-md">

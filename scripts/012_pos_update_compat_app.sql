@@ -13,7 +13,39 @@ ALTER TABLE public.rotas
   ADD COLUMN IF NOT EXISTS pontos_intermediarios JSONB;
 
 -- -----------------------------------------------------
--- 2) CHECK DE tipo_evento (inclui manutencao)
+-- 2) CHECK DE viagens.status (compat app)
+-- -----------------------------------------------------
+DO $$
+DECLARE
+  c RECORD;
+BEGIN
+  IF to_regclass('public.viagens') IS NOT NULL THEN
+    FOR c IN
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid = 'public.viagens'::regclass
+        AND contype = 'c'
+        AND pg_get_constraintdef(oid) ILIKE '%status%'
+    LOOP
+      EXECUTE format('ALTER TABLE public.viagens DROP CONSTRAINT %I', c.conname);
+    END LOOP;
+
+    ALTER TABLE public.viagens
+      ADD CONSTRAINT viagens_status_check
+      CHECK (
+        status IN (
+          'Planejada',
+          'Em andamento',
+          'Concluida',
+          'Cancelada'
+        )
+      );
+  END IF;
+END
+$$;
+
+-- -----------------------------------------------------
+-- 3) CHECK DE tipo_evento (inclui manutencao)
 -- -----------------------------------------------------
 DO $$
 DECLARE
@@ -50,7 +82,7 @@ END
 $$;
 
 -- -----------------------------------------------------
--- 3) CHECK DE custos_viagem.categoria (compat app)
+-- 4) CHECK DE custos_viagem.categoria (compat app)
 -- -----------------------------------------------------
 DO $$
 DECLARE
@@ -87,7 +119,7 @@ END
 $$;
 
 -- -----------------------------------------------------
--- 4) CHECK DE contas_pagar.categoria (compat app)
+-- 5) CHECK DE contas_pagar.categoria (compat app)
 -- -----------------------------------------------------
 DO $$
 DECLARE
@@ -125,7 +157,7 @@ END
 $$;
 
 -- -----------------------------------------------------
--- 5) CHECK DE manutencoes.sistema (compat app)
+-- 6) CHECK DE manutencoes.sistema (compat app)
 -- -----------------------------------------------------
 DO $$
 DECLARE

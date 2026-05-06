@@ -171,32 +171,27 @@ export function VeiculosClient({ initialVeiculos }: VeiculosClientProps) {
   ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
-          <Truck className="h-7 w-7 text-primary" />
-          Veiculos
-        </h1>
-        <p className="text-muted-foreground">
-          Gerencie a frota de veiculos da sua transportadora
-        </p>
+    <div className="space-y-5">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Veículos</h1>
+          <p className="page-subtitle">Gestão da frota de veículos e carretas</p>
+        </div>
       </div>
 
-      <Card className="border-border/50">
-        <CardContent className="pt-6">
-          <DataTable
-            data={veiculos}
-            columns={columns}
-            searchKey="placa_cavalo"
-            searchPlaceholder="Buscar por placa..."
-            onAdd={handleAdd}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            addLabel="Novo Veiculo"
-            emptyMessage="Nenhum veiculo cadastrado"
-          />
-        </CardContent>
-      </Card>
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm p-5">
+        <DataTable
+          data={veiculos}
+          columns={columns}
+          searchKey="placa_cavalo"
+          searchPlaceholder="Buscar por placa..."
+          onAdd={handleAdd}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          addLabel="Novo Veículo"
+          emptyMessage="Nenhum veículo cadastrado"
+        />
+      </div>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-md">

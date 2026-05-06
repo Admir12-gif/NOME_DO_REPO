@@ -188,32 +188,27 @@ export function ClientesClient({ initialClientes }: ClientesClientProps) {
   ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
-          <Building2 className="h-7 w-7 text-primary" />
-          Clientes
-        </h1>
-        <p className="text-muted-foreground">
-          Gerencie os clientes da sua transportadora
-        </p>
+    <div className="space-y-5">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Clientes</h1>
+          <p className="page-subtitle">Gerencie os clientes da transportadora</p>
+        </div>
       </div>
 
-      <Card className="border-border/50">
-        <CardContent className="pt-6">
-          <DataTable
-            data={clientes}
-            columns={columns}
-            searchKey="nome"
-            searchPlaceholder="Buscar cliente..."
-            onAdd={handleAdd}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            addLabel="Novo Cliente"
-            emptyMessage="Nenhum cliente cadastrado"
-          />
-        </CardContent>
-      </Card>
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm p-5">
+        <DataTable
+          data={clientes}
+          columns={columns}
+          searchKey="nome"
+          searchPlaceholder="Buscar por nome..."
+          onAdd={handleAdd}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          addLabel="Novo Cliente"
+          emptyMessage="Nenhum cliente cadastrado"
+        />
+      </div>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-md">
