@@ -12,8 +12,11 @@ import {
   Fuel,
   Loader2,
   MapPin,
+  MoreHorizontal,
+  Pencil,
   Plus,
   Route,
+  Trash2,
   TriangleAlert,
   Wrench,
 } from "lucide-react"
@@ -72,6 +75,13 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 interface ViagemDetalheClientProps {
   viagem: Viagem
@@ -3854,7 +3864,7 @@ export function ViagemDetalheClient({
     const planejamentoRota = rotaSelecionada
       ? buildPlanejamentoRotaFromForm(rotaSelecionada, novaViagemForm.data_inicio, novaViagemForm.data_fim)
       : null
-    const { error } = await supabase.from("viagens").update({
+    const updates = {
       cliente_id: novaViagemForm.cliente_id || null,
       veiculo_id: novaViagemForm.veiculo_id || null,
       motorista_id: novaViagemForm.motorista_id || null,
@@ -3869,13 +3879,35 @@ export function ViagemDetalheClient({
       forma_pagamento: novaViagemForm.forma_pagamento || null,
       planejamento_rota: planejamentoRota,
       updated_at: new Date().toISOString(),
-    }).eq("id", editingViagemId)
+    }
+    const { error } = await supabase.from("viagens").update(updates).eq("id", editingViagemId)
     setLoading(false)
     if (!error) {
+      const targetId = editingViagemId
+      const patchViagem = <T extends Viagem>(v: T): T => ({
+        ...v,
+        cliente_id: updates.cliente_id,
+        veiculo_id: updates.veiculo_id,
+        motorista_id: updates.motorista_id,
+        rota_id: updates.rota_id,
+        origem_real: updates.origem_real,
+        destino_real: updates.destino_real,
+        tipo_carga: updates.tipo_carga,
+        volume_toneladas: updates.volume_toneladas,
+        valor_frete: updates.valor_frete,
+        veiculo: veiculosCadastro.find((ve) => ve.id === updates.veiculo_id) ?? v.veiculo,
+        motorista: motoristasCadastro.find((m) => m.id === updates.motorista_id) ?? v.motorista,
+        rota: rotasCadastro.find((r) => r.id === updates.rota_id) ?? v.rota,
+        cliente: clientesCadastro.find((c) => c.id === updates.cliente_id) ?? v.cliente,
+      })
+      if (targetId === viagemState.id) {
+        setViagemState((prev) => patchViagem(prev))
+      } else {
+        setSubViagensCarregadas((prev) => prev.map((v) => v.id === targetId ? patchViagem(v) : v))
+      }
       setNovaViagemModalOpen(false)
       setEditingViagemId(null)
       setShowNovaViagemAdvanced(false)
-      await recarregarDados()
     }
   }
 
@@ -3885,9 +3917,9 @@ export function ViagemDetalheClient({
     const { error } = await supabase.from("viagens").delete().eq("id", deleteViagemId)
     setLoading(false)
     if (!error) {
+      setSubViagensCarregadas((prev) => prev.filter((v) => v.id !== deleteViagemId))
       setDeleteViagemDialogOpen(false)
       setDeleteViagemId(null)
-      await recarregarDados()
     }
   }
 
@@ -4021,19 +4053,77 @@ export function ViagemDetalheClient({
                                       <Route className="size-3 shrink-0 text-muted-foreground/60" />
                                       <span className="truncate">{grupo.origem} → {grupo.destino}</span>
                                     </span>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-6 w-6 p-0 ml-auto text-muted-foreground hover:text-foreground shrink-0"
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        const newExpanded = new Set(expandedViagensIds)
-                                        if (newExpanded.has(grupo.viagemId)) { newExpanded.delete(grupo.viagemId) } else { newExpanded.add(grupo.viagemId) }
-                                        setExpandedViagensIds(newExpanded)
-                                      }}
-                                    >
-                                      <span className="text-xs">{expandedViagensIds.has(grupo.viagemId) ? "▲" : "▼"}</span>
-                                    </Button>
+                                    <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                                      {/* Menu de ações da viagem */}
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 px-2 gap-1 text-xs text-muted-foreground border-border/60 hover:border-border hover:text-foreground"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <MoreHorizontal className="size-3.5" />
+                                            <span className="hidden sm:inline">Viagem</span>
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
+                                          <DropdownMenuItem
+                                            className="gap-2 cursor-pointer"
+                                            onClick={() => {
+                                              const v = grupo.viagem
+                                              setEditingViagemId(grupo.viagemId)
+                                              setNovaViagemForm({
+                                                ciclo_id: v?.ciclo_id || cicloIdReferencia,
+                                                cliente_id: v?.cliente_id || "",
+                                                veiculo_id: v?.veiculo_id || "",
+                                                motorista_id: v?.motorista_id || "",
+                                                rota_id: v?.rota_id || "",
+                                                origem_real: v?.origem_real || "",
+                                                destino_real: v?.destino_real || "",
+                                                data_inicio: toDatetimeLocal(v?.data_inicio || ""),
+                                                data_fim: toDatetimeLocal(v?.data_fim || ""),
+                                                tipo_carga: v?.tipo_carga || "",
+                                                volume_toneladas: v?.volume_toneladas?.toString() || "",
+                                                valor_frete: v?.valor_frete?.toString() || "",
+                                                forma_pagamento: (v as any)?.forma_pagamento || "Pix",
+                                                status: (v?.status as Viagem["status"]) || "Planejada",
+                                              })
+                                              setNovaViagemModalOpen(true)
+                                            }}
+                                          >
+                                            <Pencil className="size-3.5" />
+                                            Editar viagem
+                                          </DropdownMenuItem>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuItem
+                                            className="gap-2 cursor-pointer text-destructive focus:text-destructive"
+                                            onClick={() => {
+                                              setDeleteViagemId(grupo.viagemId)
+                                              setDeleteViagemDialogOpen(true)
+                                            }}
+                                          >
+                                            <Trash2 className="size-3.5" />
+                                            Excluir viagem
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
+
+                                      {/* Expandir/Colapsar */}
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          const newExpanded = new Set(expandedViagensIds)
+                                          if (newExpanded.has(grupo.viagemId)) { newExpanded.delete(grupo.viagemId) } else { newExpanded.add(grupo.viagemId) }
+                                          setExpandedViagensIds(newExpanded)
+                                        }}
+                                      >
+                                        <span className="text-xs">{expandedViagensIds.has(grupo.viagemId) ? "▲" : "▼"}</span>
+                                      </Button>
+                                    </div>
                                   </div>
                                   {/* Linha 2: Chips informativos */}
                                   <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
@@ -4819,57 +4909,124 @@ export function ViagemDetalheClient({
                                 </div>
                               </div>
                             )}
-                            {quickActionPartidaChegadaAtiva && (
-                              <div className="space-y-3">
-                                {/* Rota */}
-                                <div className="rounded-xl border border-blue-200/70 overflow-hidden">
-                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
-                                    <div className="size-1.5 rounded-full bg-blue-500" />
-                                    <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Rota</p>
-                                  </div>
-                                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <div className="md:col-span-2">
-                                      <Label className="text-xs font-semibold text-muted-foreground">Origem</Label>
-                                      <Input
-                                        className="mt-1.5 text-sm"
-                                        value={eventForm.origem || viagemState.origem_real || (viagemState.rota?.origem_cidade && viagemState.rota?.origem_estado ? `${viagemState.rota.origem_cidade}/${viagemState.rota.origem_estado}` : "") || ""}
-                                        onChange={e => setEventForm(f => ({ ...f, origem: e.target.value }))}
-                                      />
-                                    </div>
-                                    <div className="md:col-span-2">
-                                      <Label className="text-xs font-semibold text-muted-foreground">Destino</Label>
-                                      <Input
-                                        className="mt-1.5 text-sm"
-                                        value={eventForm.destino || viagemState.destino_real || (viagemState.rota?.destino_cidade && viagemState.rota?.destino_estado ? `${viagemState.rota.destino_cidade}/${viagemState.rota.destino_estado}` : "") || ""}
-                                        onChange={e => setEventForm(f => ({ ...f, destino: e.target.value }))}
-                                      />
-                                    </div>
-                                  </div>
-                                </div>
+                            {quickActionPartidaChegadaAtiva && (() => {
+                              const isChegada = eventForm.titulo === "Chegada"
+                              const isPartida = !isChegada
 
-                                {/* Horários */}
-                                <div className="rounded-xl border border-blue-200/70 overflow-hidden">
-                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
-                                    <div className="size-1.5 rounded-full bg-blue-500" />
-                                    <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Horários</p>
+                              const origemDefault = viagemState.origem_real || (viagemState.rota?.origem_cidade && viagemState.rota?.origem_estado ? `${viagemState.rota.origem_cidade}/${viagemState.rota.origem_estado}` : "")
+                              const destinoDefault = viagemState.destino_real || (viagemState.rota?.destino_cidade && viagemState.rota?.destino_estado ? `${viagemState.rota.destino_cidade}/${viagemState.rota.destino_estado}` : "")
+
+                              // Última partida registrada para calcular duração em viagem
+                              const ultimaPartida = eventosRealizados
+                                .filter(e => e.tipo_evento === "saida")
+                                .sort((a, b) => new Date(b.ocorrido_em).getTime() - new Date(a.ocorrido_em).getTime())[0] || null
+
+                              const duracaoViagem = (() => {
+                                if (!ultimaPartida || !eventForm.inicio_em) return null
+                                const diff = Math.round((new Date(eventForm.inicio_em).getTime() - new Date(ultimaPartida.ocorrido_em).getTime()) / 60000)
+                                if (diff <= 0) return null
+                                const h = Math.floor(diff / 60)
+                                const m = diff % 60
+                                return h > 0 ? `${h}h ${m}min` : `${m}min`
+                              })()
+
+                              return (
+                                <div className="space-y-3">
+                                  {/* Toggle Partida / Chegada */}
+                                  <div className="flex rounded-xl border border-border/60 overflow-hidden bg-muted/20">
+                                    <button
+                                      type="button"
+                                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold transition-all ${isPartida ? "bg-blue-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
+                                      onClick={() => setEventForm(f => ({ ...f, titulo: "Saída", tipo_evento: "saida" as EventoViagemTipo }))}
+                                    >
+                                      <ArrowRightLeft className="size-3.5" />
+                                      Partida
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold transition-all ${isChegada ? "bg-emerald-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
+                                      onClick={() => setEventForm(f => ({ ...f, titulo: "Chegada", tipo_evento: "chegada" as EventoViagemTipo }))}
+                                    >
+                                      <MapPin className="size-3.5" />
+                                      Chegada
+                                    </button>
                                   </div>
-                                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Data/Hora partida <span className="text-blue-600">*</span></Label>
-                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+
+                                  {/* Formulário de Partida */}
+                                  {isPartida && (
+                                    <div className="rounded-xl border border-blue-200/70 overflow-hidden">
+                                      <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
+                                        <div className="size-1.5 rounded-full bg-blue-500" />
+                                        <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Partida</p>
+                                      </div>
+                                      <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Data/Hora <span className="text-blue-600">*</span></Label>
+                                          <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Local de partida</Label>
+                                          <Input className="mt-1.5 text-sm" value={eventForm.origem || origemDefault} onChange={e => setEventForm(f => ({ ...f, origem: e.target.value }))} placeholder="Cidade/UF ou local" />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Destino</Label>
+                                          <Input className="mt-1.5 text-sm" value={eventForm.destino || destinoDefault} onChange={e => setEventForm(f => ({ ...f, destino: e.target.value }))} placeholder="Cidade/UF ou local" />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Observação</Label>
+                                          <Input className="mt-1.5 text-sm" value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Observações da partida" />
+                                        </div>
+                                      </div>
                                     </div>
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Data/Hora chegada</Label>
-                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.fim_em} onChange={e => setEventForm(f => ({ ...f, fim_em: e.target.value }))} />
+                                  )}
+
+                                  {/* Formulário de Chegada */}
+                                  {isChegada && (
+                                    <div className="rounded-xl border border-emerald-200/70 overflow-hidden">
+                                      <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-emerald-50/60 border-b border-emerald-200/60">
+                                        <div className="flex items-center gap-2">
+                                          <div className="size-1.5 rounded-full bg-emerald-500" />
+                                          <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-700">Chegada</p>
+                                        </div>
+                                        {duracaoViagem && (
+                                          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 border border-emerald-200 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
+                                            <Clock3 className="size-3" />
+                                            {duracaoViagem} em viagem
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Data/Hora <span className="text-emerald-600">*</span></Label>
+                                          <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Local de chegada</Label>
+                                          <Input className="mt-1.5 text-sm" value={eventForm.destino || destinoDefault} onChange={e => setEventForm(f => ({ ...f, destino: e.target.value }))} placeholder="Cidade/UF ou local" />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Origem</Label>
+                                          <Input className="mt-1.5 text-sm" value={eventForm.origem || origemDefault} onChange={e => setEventForm(f => ({ ...f, origem: e.target.value }))} placeholder="Cidade/UF ou local" />
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs font-semibold text-muted-foreground">Observação</Label>
+                                          <Input className="mt-1.5 text-sm" value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Observações da chegada" />
+                                        </div>
+                                        {ultimaPartida && (
+                                          <div className="md:col-span-2">
+                                            <div className="rounded-lg bg-muted/30 border border-border/50 px-3 py-2 flex items-center gap-2 text-xs text-muted-foreground">
+                                              <Clock3 className="size-3.5 shrink-0" />
+                                              <span>Última partida: <span className="font-semibold text-foreground">{ultimaPartida.local || "—"}</span> em {new Date(ultimaPartida.ocorrido_em).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+                                              {duracaoViagem && <span className="ml-auto font-semibold text-emerald-700">{duracaoViagem}</span>}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
-                                    <div className="md:col-span-2">
-                                      <Label className="text-xs font-semibold text-muted-foreground">Observação</Label>
-                                      <Textarea className="mt-1.5 text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Observações da partida ou chegada" />
-                                    </div>
-                                  </div>
+                                  )}
                                 </div>
-                              </div>
-                            )}
+                              )
+                            })()}
                             {selectedQuickAction && selectedQuickAction.type === 'parada' && (
                               <div className="space-y-3">
                                 {/* Dados principais */}
@@ -5436,203 +5593,210 @@ export function ViagemDetalheClient({
         </TabsContent>
       </Tabs>
 
-      <Dialog open={novaViagemModalOpen} onOpenChange={setNovaViagemModalOpen}>
-        <DialogContent className="max-w-4xl max-h-[88vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Iniciar nova viagem do ciclo</DialogTitle>
+      <Dialog open={novaViagemModalOpen} onOpenChange={(open) => { setNovaViagemModalOpen(open); if (!open) { setEditingViagemId(null); setShowNovaViagemAdvanced(false) } }}>
+        <DialogContent className="max-w-2xl p-0 overflow-hidden flex flex-col max-h-[90vh]">
+          {/* Header */}
+          <DialogHeader style={{ background: 'linear-gradient(135deg, oklch(0.13 0.045 265) 0%, oklch(0.18 0.04 260) 100%)', padding: '1.25rem 1.5rem 1rem', flexShrink: 0 }}>
+            <DialogTitle className="text-xl font-bold tracking-tight text-white">
+              {editingViagemId ? "Editar Viagem" : "Nova Viagem do Ciclo"}
+            </DialogTitle>
+            <p className="text-xs text-white/50 mt-0.5">
+              {editingViagemId ? "Atualize os dados operacionais desta viagem" : "Configure e inicie uma nova viagem dentro do ciclo"}
+            </p>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="flex justify-end">
-              <Button type="button" variant="outline" onClick={() => setShowNovaViagemAdvanced((prev) => !prev)}>
-                {showNovaViagemAdvanced ? "Ocultar campos avançados" : "Mostrar campos avançados"}
-              </Button>
-            </div>
-
-            <div className="grid gap-2">
-              <Label>ID do Ciclo</Label>
-              <Input
-                value={novaViagemForm.ciclo_id}
-                onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, ciclo_id: event.target.value }))}
-              />
-              <p className="text-xs text-muted-foreground">
-                Use o mesmo ID para agrupar as viagens no mesmo ciclo.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="grid gap-2">
-                <Label>Cliente</Label>
-                <Select
-                  value={novaViagemForm.cliente_id}
-                  onValueChange={(value) => setNovaViagemForm((prev) => ({ ...prev, cliente_id: value }))}
-                >
-                  <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
-                  <SelectContent>
-                    {clientesCadastro.map((cliente) => (
-                      <SelectItem key={cliente.id} value={cliente.id}>{cliente.nome}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label>Status inicial</Label>
-                <Input value="Planejada" disabled />
-              </div>
-
-              <div className="grid gap-2">
-                <Label>Veículo</Label>
-                <Select
-                  value={novaViagemForm.veiculo_id}
-                  onValueChange={(value) => setNovaViagemForm((prev) => ({ ...prev, veiculo_id: value }))}
-                >
-                  <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
-                  <SelectContent>
-                    {veiculosCadastro.map((veiculo) => (
-                      <SelectItem key={veiculo.id} value={veiculo.id}>{veiculo.placa_cavalo || "Sem placa"}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label>Motorista</Label>
-                <Select
-                  value={novaViagemForm.motorista_id}
-                  onValueChange={(value) => setNovaViagemForm((prev) => ({ ...prev, motorista_id: value }))}
-                >
-                  <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
-                  <SelectContent>
-                    {motoristasCadastro.map((motorista) => (
-                      <SelectItem key={motorista.id} value={motorista.id}>{motorista.nome}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <Label>Rota Planejada</Label>
-              <Select
-                value={novaViagemForm.rota_id}
-                onValueChange={(value) => {
-                  const rota = rotasCadastro.find((item) => item.id === value)
-                  setNovaViagemForm((prev) => ({
-                    ...prev,
-                    rota_id: value,
-                    origem_real: rota?.origem_cidade && rota?.origem_estado
-                      ? `${rota.origem_cidade}/${rota.origem_estado}`
-                      : prev.origem_real,
-                    destino_real: rota?.destino_cidade && rota?.destino_estado
-                      ? `${rota.destino_cidade}/${rota.destino_estado}`
-                      : prev.destino_real,
-                  }))
-                }}
-              >
-                <SelectTrigger><SelectValue placeholder="Selecione uma rota ou preencha manualmente" /></SelectTrigger>
-                <SelectContent>
-                  {rotasCadastro.map((rota) => (
-                    <SelectItem key={rota.id} value={rota.id}>{rota.nome}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="grid gap-2">
-                <Label>Origem</Label>
-                <Input
-                  value={novaViagemForm.origem_real}
-                  onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, origem_real: event.target.value }))}
-                  placeholder="Cidade/UF"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>Destino</Label>
-                <Input
-                  value={novaViagemForm.destino_real}
-                  onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, destino_real: event.target.value }))}
-                  placeholder="Cidade/UF"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="grid gap-2">
-                <Label>Partida planejada</Label>
-                <Input
-                  type="datetime-local"
-                  value={novaViagemForm.data_inicio}
-                  onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, data_inicio: event.target.value }))}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>Chegada planejada</Label>
-                <Input
-                  type="datetime-local"
-                  value={novaViagemForm.data_fim}
-                  onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, data_fim: event.target.value }))}
-                />
-              </div>
-            </div>
-
-            {showNovaViagemAdvanced && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 rounded-md border border-border/60 p-3">
-                <div className="grid gap-2">
-                  <Label>Tipo de carga</Label>
-                  <Input
-                    value={novaViagemForm.tipo_carga}
-                    onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, tipo_carga: event.target.value }))}
-                  />
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto p-5 space-y-3">
+            {/* Ciclo */}
+            {!editingViagemId && (
+              <div className="rounded-xl border border-blue-200/70 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
+                  <div className="size-1.5 rounded-full bg-blue-500" />
+                  <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Ciclo</p>
                 </div>
-                <div className="grid gap-2">
-                  <Label>Volume (t)</Label>
+                <div className="p-4">
+                  <Label className="text-xs font-semibold text-muted-foreground">ID do Ciclo</Label>
                   <Input
-                    type="number"
-                    step="0.01"
-                    value={novaViagemForm.volume_toneladas}
-                    onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, volume_toneladas: event.target.value }))}
+                    className="mt-1.5 text-sm font-mono"
+                    value={novaViagemForm.ciclo_id}
+                    onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, ciclo_id: e.target.value }))}
                   />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Valor frete (R$)</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={novaViagemForm.valor_frete}
-                    onChange={(event) => setNovaViagemForm((prev) => ({ ...prev, valor_frete: event.target.value }))}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Metodo de pagamento</Label>
-                  <Select
-                    value={novaViagemForm.forma_pagamento}
-                    onValueChange={(value) => setNovaViagemForm((prev) => ({ ...prev, forma_pagamento: value }))}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
-                    <SelectContent>
-                      {metodosPagamentoBrasil.map((metodo) => (
-                        <SelectItem key={metodo} value={metodo}>{metodo}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
               </div>
             )}
 
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={() => setNovaViagemModalOpen(false)}>
-                Cancelar
-              </Button>
-              <Button type="button" onClick={handleSalvarNovaViagemModal} disabled={loading}>
-                {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
-                Salvar e iniciar viagem
-              </Button>
+            {/* Operação */}
+            <div className="rounded-xl border border-blue-200/70 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
+                <div className="size-1.5 rounded-full bg-blue-500" />
+                <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Operação</p>
+              </div>
+              <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Cliente</Label>
+                  <Select value={novaViagemForm.cliente_id} onValueChange={(v) => setNovaViagemForm((prev) => ({ ...prev, cliente_id: v }))}>
+                    <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                    <SelectContent>
+                      {clientesCadastro.map((c) => <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Veículo</Label>
+                  <Select value={novaViagemForm.veiculo_id} onValueChange={(v) => setNovaViagemForm((prev) => ({ ...prev, veiculo_id: v }))}>
+                    <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                    <SelectContent>
+                      {veiculosCadastro.map((v) => <SelectItem key={v.id} value={v.id}>{v.placa_cavalo || "Sem placa"}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Motorista</Label>
+                  <Select value={novaViagemForm.motorista_id} onValueChange={(v) => setNovaViagemForm((prev) => ({ ...prev, motorista_id: v }))}>
+                    <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                    <SelectContent>
+                      {motoristasCadastro.map((m) => <SelectItem key={m.id} value={m.id}>{m.nome}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
+
+            {/* Rota */}
+            <div className="rounded-xl border border-emerald-200/70 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50/60 border-b border-emerald-200/60">
+                <div className="size-1.5 rounded-full bg-emerald-500" />
+                <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-700">Rota</p>
+              </div>
+              <div className="p-4 space-y-3">
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Rota planejada</Label>
+                  <Select
+                    value={novaViagemForm.rota_id}
+                    onValueChange={(value) => {
+                      const rota = rotasCadastro.find((item) => item.id === value)
+                      setNovaViagemForm((prev) => ({
+                        ...prev,
+                        rota_id: value,
+                        origem_real: rota?.origem_cidade && rota?.origem_estado ? `${rota.origem_cidade}/${rota.origem_estado}` : prev.origem_real,
+                        destino_real: rota?.destino_cidade && rota?.destino_estado ? `${rota.destino_cidade}/${rota.destino_estado}` : prev.destino_real,
+                      }))
+                    }}
+                  >
+                    <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione ou preencha manualmente" /></SelectTrigger>
+                    <SelectContent>
+                      {rotasCadastro.map((r) => <SelectItem key={r.id} value={r.id}>{r.nome}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Origem</Label>
+                    <Input className="mt-1.5 text-sm" value={novaViagemForm.origem_real} onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, origem_real: e.target.value }))} placeholder="Cidade/UF" />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Destino</Label>
+                    <Input className="mt-1.5 text-sm" value={novaViagemForm.destino_real} onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, destino_real: e.target.value }))} placeholder="Cidade/UF" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Agenda */}
+            <div className="rounded-xl border border-violet-200/70 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
+                <div className="size-1.5 rounded-full bg-violet-500" />
+                <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Agenda</p>
+              </div>
+              <div className="p-4 grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Partida planejada</Label>
+                  <Input type="datetime-local" className="mt-1.5 text-sm" value={novaViagemForm.data_inicio} onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, data_inicio: e.target.value }))} />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Chegada planejada</Label>
+                  <Input type="datetime-local" className="mt-1.5 text-sm" value={novaViagemForm.data_fim} onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, data_fim: e.target.value }))} />
+                </div>
+              </div>
+            </div>
+
+            {/* Carga & Financeiro (avançado) */}
+            <div className="rounded-xl border border-amber-200/70 overflow-hidden">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between gap-2 px-4 py-2.5 bg-amber-50/60 border-b border-amber-200/60 hover:bg-amber-50 transition-colors"
+                onClick={() => setShowNovaViagemAdvanced((prev) => !prev)}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="size-1.5 rounded-full bg-amber-500" />
+                  <p className="text-[11px] font-bold uppercase tracking-widest text-amber-700">Carga & Financeiro</p>
+                </div>
+                <span className="text-[11px] text-amber-600 font-medium">{showNovaViagemAdvanced ? "Ocultar" : "Mostrar"}</span>
+              </button>
+              {showNovaViagemAdvanced && (
+                <div className="p-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Tipo de carga</Label>
+                    <Input className="mt-1.5 text-sm" value={novaViagemForm.tipo_carga} onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, tipo_carga: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Volume (t)</Label>
+                    <Input type="number" step="0.01" className="mt-1.5 text-sm" value={novaViagemForm.volume_toneladas} onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, volume_toneladas: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Valor frete (R$)</Label>
+                    <Input type="number" step="0.01" className="mt-1.5 text-sm" value={novaViagemForm.valor_frete} onChange={(e) => setNovaViagemForm((prev) => ({ ...prev, valor_frete: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Pagamento</Label>
+                    <Select value={novaViagemForm.forma_pagamento} onValueChange={(v) => setNovaViagemForm((prev) => ({ ...prev, forma_pagamento: v }))}>
+                      <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                      <SelectContent>
+                        {metodosPagamentoBrasil.map((metodo) => <SelectItem key={metodo} value={metodo}>{metodo}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div style={{ borderTop: '1px solid var(--border)', background: 'var(--card)', padding: '0.875rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', flexShrink: 0 }}>
+            <Button type="button" variant="outline" className="h-9" onClick={() => setNovaViagemModalOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              className="h-9 gradient-primary font-semibold"
+              onClick={editingViagemId ? handleAtualizarViagem : handleSalvarNovaViagemModal}
+              disabled={loading}
+            >
+              {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+              {editingViagemId ? "Salvar alterações" : "Salvar e iniciar viagem"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Delete viagem confirmation */}
+      <AlertDialog open={deleteViagemDialogOpen} onOpenChange={setDeleteViagemDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir viagem?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação não pode ser desfeita. Todos os eventos vinculados a esta viagem serão afetados.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleExcluirViagem} className="bg-destructive hover:bg-destructive/90">
+              {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+              Excluir viagem
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={operacaoViagemModalOpen} onOpenChange={setOperacaoViagemModalOpen}>
         <DialogContent className="max-w-md">
