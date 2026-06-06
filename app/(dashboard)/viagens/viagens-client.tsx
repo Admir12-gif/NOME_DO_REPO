@@ -1,86 +1,18 @@
 "use client"
 
-import React from "react"
-
-import { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { ViagemDetalheClient } from "./[viagemId]/viagemDetalheClient"
-import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import type {
-  Viagem,
-  Cliente,
-  Veiculo,
-  Motorista,
-  Rota,
-  PontoIntermediario,
-  ViagemEvento,
-  CustoViagem,
-  ReceitaViagem,
-  ViagemDocumento,
-  EtaParametro,
-  ViagemPlanejamentoRota,
-  ViagemPlanejamentoIntermediario,
-} from "@/lib/types"
-import { getPontoParadaTipoLabel } from "@/lib/types"
-import { 
-  Route, 
-  Plus, 
-  Search,
-  Truck,
-  User,
-  Users,
-  MapPin,
-  ArrowRight,
-  Calendar,
-  DollarSign,
-  MoreHorizontal,
-  Pencil,
-  Trash2,
-  Play,
-  CheckCircle,
-  XCircle,
-} from "lucide-react"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  QuickClienteModal,
-  QuickVeiculoModal,
-  QuickMotoristaModal,
-  QuickRotaModal,
-} from "@/components/quick-register-modals"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { QuickClienteModal, QuickVeiculoModal, QuickMotoristaModal, QuickRotaModal } from "@/components/quick-register-modals"
+import type { Viagem, Cliente, Veiculo, Motorista, Rota, ViagemEvento, CustoViagem, ReceitaViagem, ViagemDocumento, EtaParametro } from "@/lib/types"
+import { Plus, Search, Truck, User, MapPin, Calendar, MoreHorizontal, Pencil, Trash2, CheckCircle, XCircle, Route, Loader2, ChevronRight } from "lucide-react"
 
 interface ViagensClientProps {
   initialViagens: Viagem[]
@@ -91,578 +23,116 @@ interface ViagensClientProps {
 }
 
 interface ViagemFormData {
-  ciclo_id: string
   cliente_id: string
   veiculo_id: string
   motorista_id: string
   rota_id: string
-  rota_avulsa: boolean
   origem_real: string
   destino_real: string
   data_inicio: string
   data_fim: string
-  tipo_carga: string
-  volume_toneladas: string
-  km_real: string
   valor_frete: string
+  tipo_carga: string
   status: string
-  planejamento_rota: ViagemPlanejamentoRota | null
 }
 
-const STATUS_OPTIONS = [
-  { value: "Planejada", label: "Planejada" },
-  { value: "Em andamento", label: "Em andamento" },
-  { value: "Concluida", label: "Concluida" },
-  { value: "Cancelada", label: "Cancelada" },
-]
-
-const statusColors: Record<string, string> = {
-  Planejada: "badge-planejada",
-  "Em andamento": "badge-andamento",
-  Concluida: "badge-concluida",
-  Cancelada: "badge-cancelada",
-  Planeado: "badge-planejada",
-  Realizado: "badge-concluida",
+const statusConfig: Record<string, { label: string; bg: string; text: string; dot: string }> = {
+  Planejada:      { label: "Planejada",      bg: "bg-slate-100",   text: "text-slate-700",   dot: "bg-slate-400"  },
+  "Em andamento": { label: "Em andamento",   bg: "bg-blue-100",    text: "text-blue-700",    dot: "bg-blue-500"   },
+  Concluida:      { label: "Concluída",      bg: "bg-emerald-100", text: "text-emerald-700", dot: "bg-emerald-500"},
+  Cancelada:      { label: "Cancelada",      bg: "bg-rose-100",    text: "text-rose-700",    dot: "bg-rose-500"   },
 }
 
-function normalizeViagemStatus(status?: string | null) {
-  if (!status) return "Planejada"
-  const normalized = status
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase()
-    .trim()
-
-  if (["concluida", "fechada", "fechado", "finalizada", "encerrada"].includes(normalized)) return "Concluida"
-  if (["em andamento", "andamento", "aberta", "aberto", "em_execucao", "executando"].includes(normalized)) return "Em andamento"
-  if (["planejada", "planejado"].includes(normalized)) return "Planejada"
-  if (["cancelada", "cancelado"].includes(normalized)) return "Cancelada"
-  return status
+function normalizeStatus(s?: string | null) {
+  if (!s) return "Planejada"
+  const n = s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim()
+  if (["concluida", "fechada", "finalizada"].includes(n)) return "Concluida"
+  if (["em andamento", "andamento", "aberta"].includes(n)) return "Em andamento"
+  if (["cancelada"].includes(n)) return "Cancelada"
+  return "Planejada"
 }
 
-type CicloResumo = {
-  cicloId: string
-  viagens: Viagem[]
-  viagemDestaque: Viagem
-  statusCiclo: "Planeado" | "Realizado"
-  valorTotal: number
-  kmTotal: number
+function formatCurrency(v: number) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v)
 }
 
-function formatCurrency(value: number) {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(value)
+function formatDate(d: string | null) {
+  if (!d) return "—"
+  return new Date(d).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit" })
 }
 
-function formatDate(dateStr: string | null) {
-  if (!dateStr) return "-"
-  return new Date(dateStr).toLocaleDateString("pt-BR")
+function toDatetimeLocal(v?: string | null) {
+  if (!v) return ""
+  const d = new Date(v)
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+  return d.toISOString().slice(0, 16)
 }
 
-function formatPontosIntermediarios(pontos?: PontoIntermediario[] | null) {
-  if (!pontos || pontos.length === 0) return null
-  return pontos
-    .map((ponto) => `${ponto.cidade}/${ponto.estado} (${getPontoParadaTipoLabel(ponto.tipo_parada)})`)
-    .join(" • ")
-}
+export function ViagensClient({ initialViagens, clientes: initialClientes, veiculos: initialVeiculos, motoristas: initialMotoristas, rotas: initialRotas }: ViagensClientProps) {
+  const supabase = createClient()
 
-function toDatetimeLocal(value?: string | null) {
-  if (!value) return ""
-  const date = new Date(value)
-  date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
-  return date.toISOString().slice(0, 16)
-}
-
-function toIsoOrNull(value?: string | null) {
-  if (!value) return null
-  return new Date(value).toISOString()
-}
-
-function addHoursToIso(baseIso: string, hours: number) {
-  const base = new Date(baseIso)
-  if (!Number.isFinite(base.getTime()) || !Number.isFinite(hours)) return null
-  return new Date(base.getTime() + hours * 60 * 60 * 1000).toISOString()
-}
-
-function buildIntermediarioChave(ponto: PontoIntermediario, index: number) {
-  const cidade = (ponto.cidade || "").trim().toLowerCase()
-  const estado = (ponto.estado || "").trim().toLowerCase()
-  return `${index}:${cidade}:${estado}`
-}
-
-function buildDefaultCycleId() {
-  const now = new Date()
-  const year = now.getFullYear()
-  const stamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(4, 14)
-  return `CIC-${year}-${stamp}`
-}
-
-function buildCycleIdFromTitle(title: string) {
-  const slug = title
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 24)
-
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(4, 14)
-  return `CIC-${slug || "SEM-TITULO"}-${stamp}`
-}
-
-function buildPlanejamentoRota(
-  rota: Rota,
-  existing?: ViagemPlanejamentoRota | null,
-): ViagemPlanejamentoRota {
-  const existingIntermediarios = new Map(
-    (existing?.intermediarios || []).map((item) => [item.chave, item]),
-  )
-
-  const origemPartidaPlanejada = existing?.origem_partida_planejada || null
-
-  let cursorPrevisto = origemPartidaPlanejada
-
-  const intermediarios = (rota.pontos_intermediarios || [])
-    .filter((ponto) => ponto.cidade && ponto.estado)
-    .map((ponto, index): ViagemPlanejamentoIntermediario => {
-      const chave = buildIntermediarioChave(ponto, index)
-      const current = existingIntermediarios.get(chave)
-
-      const tempoTrechoHoras =
-        ponto.tempo_trecho_horas !== undefined && ponto.tempo_trecho_horas !== null
-          ? Number(ponto.tempo_trecho_horas)
-          : null
-
-      const chegadaPlanejadaAuto =
-        !current?.chegada_planejada && cursorPrevisto && tempoTrechoHoras !== null && tempoTrechoHoras >= 0
-          ? addHoursToIso(cursorPrevisto, tempoTrechoHoras)
-          : null
-
-      const chegadaPlanejada = current?.chegada_planejada || chegadaPlanejadaAuto || null
-      const partidaPlanejada = current?.partida_planejada || chegadaPlanejada || null
-
-      if (partidaPlanejada) {
-        cursorPrevisto = partidaPlanejada
-      }
-
-      return {
-        chave,
-        cidade: ponto.cidade,
-        estado: ponto.estado,
-        tipo_parada: ponto.tipo_parada,
-        chegada_planejada: chegadaPlanejada,
-        partida_planejada: partidaPlanejada,
-      }
-    })
-
-  const destinoChegadaPlanejadaAuto =
-    !existing?.destino_chegada_planejada &&
-    origemPartidaPlanejada &&
-    rota.tempo_ciclo_esperado_horas !== null &&
-    rota.tempo_ciclo_esperado_horas !== undefined
-      ? addHoursToIso(origemPartidaPlanejada, Number(rota.tempo_ciclo_esperado_horas))
-      : null
-
-  return {
-    origem_partida_planejada: origemPartidaPlanejada,
-    destino_chegada_planejada: existing?.destino_chegada_planejada || destinoChegadaPlanejadaAuto || null,
-    intermediarios,
-  }
-}
-
-function toFormPlanejamentoRota(value?: ViagemPlanejamentoRota | null) {
-  if (!value) return null
-  return {
-    origem_partida_planejada: toDatetimeLocal(value.origem_partida_planejada),
-    destino_chegada_planejada: toDatetimeLocal(value.destino_chegada_planejada),
-    intermediarios: (value.intermediarios || []).map((item) => ({
-      ...item,
-      chegada_planejada: toDatetimeLocal(item.chegada_planejada),
-      partida_planejada: toDatetimeLocal(item.partida_planejada),
-    })),
-  }
-}
-
-function toStoragePlanejamentoRota(value?: ViagemPlanejamentoRota | null) {
-  if (!value) return null
-  return {
-    origem_partida_planejada: toIsoOrNull(value.origem_partida_planejada),
-    destino_chegada_planejada: toIsoOrNull(value.destino_chegada_planejada),
-    intermediarios: (value.intermediarios || []).map((item) => ({
-      ...item,
-      chegada_planejada: toIsoOrNull(item.chegada_planejada),
-      partida_planejada: toIsoOrNull(item.partida_planejada),
-    })),
-  }
-}
-
-export function ViagensClient({ 
-  initialViagens, 
-  clientes: initialClientes, 
-  veiculos: initialVeiculos, 
-  motoristas: initialMotoristas, 
-  rotas: initialRotas 
-}: ViagensClientProps) {
   const [viagens, setViagens] = useState(initialViagens)
   const [clientes, setClientes] = useState(initialClientes)
   const [veiculos, setVeiculos] = useState(initialVeiculos)
   const [motoristas, setMotoristas] = useState(initialMotoristas)
   const [rotas, setRotas] = useState(initialRotas)
 
-  const supabase = createClient()
-
-  // Helper function to fetch viagem with postos
-  const fetchViagemWithPostos = async (viagemId: string) => {
-    const { data: viagem } = await supabase
-      .from("viagens")
-      .select("*, cliente:clientes(*), veiculo:veiculos(*), motorista:motoristas(*), rota:rotas(*)")
-      .eq("id", viagemId)
-      .single()
-
-    if (viagem && viagem.rota_id) {
-      const { data: rotaPostos } = await supabase
-        .from("rota_postos")
-        .select("posto:postos_abastecimento(*), ordem")
-        .eq("rota_id", viagem.rota_id)
-        .order("ordem")
-
-      if (rotaPostos && viagem.rota) {
-        viagem.rota.postos = rotaPostos.map((rp: any) => rp.posto)
-      }
-    }
-
-    return viagem
-  }
-
-
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [isNovoCicloDialogOpen, setIsNovoCicloDialogOpen] = useState(false)
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
-  const [selectedViagem, setSelectedViagem] = useState<Viagem | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isCreatingCycle, setIsCreatingCycle] = useState(false)
-  const [novoCicloTitulo, setNovoCicloTitulo] = useState("")
-  const [editCicloTitulo, setEditCicloTitulo] = useState("")
-  const [editingCicloId, setEditingCicloId] = useState("")
-  const [editingCicloViagemIds, setEditingCicloViagemIds] = useState<string[]>([])
   const [search, setSearch] = useState("")
   const [activeTab, setActiveTab] = useState("todas")
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Form modal
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingViagem, setEditingViagem] = useState<Viagem | null>(null)
+  const [formData, setFormData] = useState<ViagemFormData>({
+    cliente_id: "", veiculo_id: "", motorista_id: "", rota_id: "",
+    origem_real: "", destino_real: "", data_inicio: "", data_fim: "",
+    valor_frete: "", tipo_carga: "", status: "Planejada",
+  })
+
+  // Delete
+  const [deleteViagem, setDeleteViagem] = useState<Viagem | null>(null)
+
+  // Cockpit
   const [cockpitOpen, setCockpitOpen] = useState(false)
   const [cockpitLoading, setCockpitLoading] = useState(false)
-  const [cockpitData, setCockpitData] = useState<{
-    viagem: Viagem
-    eventos: ViagemEvento[]
-    custos: CustoViagem[]
-    receitas: ReceitaViagem[]
-    documentos: ViagemDocumento[]
-    parametros: EtaParametro[]
-  } | null>(null)
+  const [cockpitData, setCockpitData] = useState<{ viagem: Viagem; eventos: ViagemEvento[]; custos: CustoViagem[]; receitas: ReceitaViagem[]; documentos: ViagemDocumento[]; parametros: EtaParametro[] } | null>(null)
 
-  // Quick register modal states
+  // Quick modals
   const [quickClienteOpen, setQuickClienteOpen] = useState(false)
   const [quickVeiculoOpen, setQuickVeiculoOpen] = useState(false)
   const [quickMotoristaOpen, setQuickMotoristaOpen] = useState(false)
   const [quickRotaOpen, setQuickRotaOpen] = useState(false)
-  const [showAdvancedForm, setShowAdvancedForm] = useState(false)
 
-  const [formData, setFormData] = useState<ViagemFormData>({
-    ciclo_id: buildDefaultCycleId(),
-    cliente_id: "",
-    veiculo_id: "",
-    motorista_id: "",
-    rota_id: "",
-    rota_avulsa: false,
-    origem_real: "",
-    destino_real: "",
-    data_inicio: "",
-    data_fim: "",
-    tipo_carga: "",
-    volume_toneladas: "",
-    km_real: "",
-    valor_frete: "",
-    status: "Planejada",
-    planejamento_rota: null,
-  })
-
-  const resetForm = () => {
-    setFormData({
-      ciclo_id: buildDefaultCycleId(),
-      cliente_id: "",
-      veiculo_id: "",
-      motorista_id: "",
-      rota_id: "",
-      rota_avulsa: false,
-      origem_real: "",
-      destino_real: "",
-      data_inicio: "",
-      data_fim: "",
-      tipo_carga: "",
-      volume_toneladas: "",
-      km_real: "",
-      valor_frete: "",
-      status: "Planejada",
-      planejamento_rota: null,
-    })
-    setSelectedViagem(null)
-    setShowAdvancedForm(false)
-  }
-
-  const handleAdd = () => {
-    setNovoCicloTitulo("")
-    setIsNovoCicloDialogOpen(true)
-  }
-
-  const handleCreateCycle = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const titulo = novoCicloTitulo.trim()
-    if (!titulo) return
-
-    setIsCreatingCycle(true)
-
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      setIsCreatingCycle(false)
-      return
-    }
-
-    const cicloId = buildCycleIdFromTitle(titulo)
-    const nowIso = new Date().toISOString()
-
-    const insertBase = {
-      user_id: user.id,
-      ciclo_id: cicloId,
-      origem_real: null,
-      destino_real: null,
-      data_inicio: null,
-      data_fim: null,
-      tipo_carga: titulo,
-      status: "Planejada" as Viagem["status"],
-      created_at: nowIso,
-      updated_at: nowIso,
-    }
-
-    const insertCompat = {
-      ...insertBase,
-    }
-    delete (insertCompat as Record<string, unknown>).ciclo_id
-
-    let { data, error } = await supabase
+  const fetchViagem = async (id: string) => {
+    const { data } = await supabase
       .from("viagens")
-      .insert(insertBase)
-      .select("id")
-      .single()
-
-    if (error) {
-      const errorMsg = error.message?.toLowerCase() || ""
-      if (errorMsg.includes("ciclo_id")) {
-        const retry = await supabase
-          .from("viagens")
-          .insert(insertCompat)
-          .select("id")
-          .single()
-        data = retry.data
-        error = retry.error
-      }
-    }
-
-    if (!error && data) {
-      const novaViagem = await fetchViagemWithPostos(data.id)
-      if (novaViagem) {
-        setViagens((prev) => [novaViagem, ...prev])
-        setIsNovoCicloDialogOpen(false)
-        setNovoCicloTitulo("")
-        await handleOpenCockpitModal(novaViagem.id)
-      }
-    }
-
-    setIsCreatingCycle(false)
+      .select("*, cliente:clientes(*), veiculo:veiculos(*), motorista:motoristas(*), rota:rotas(*)")
+      .eq("id", id).single()
+    return data as Viagem | null
   }
 
-  const handleEdit = (ciclo: CicloResumo) => {
-    setEditingCicloId(ciclo.cicloId)
-    setEditCicloTitulo(ciclo.cicloId)
-    setEditingCicloViagemIds(ciclo.viagens.map((item) => item.id))
-    setIsDialogOpen(true)
-  }
-
-  const handleSaveCycleTitle = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const titulo = editCicloTitulo.trim()
-    if (!titulo || editingCicloViagemIds.length === 0) return
-
-    setIsLoading(true)
-    const novoCicloId = buildCycleIdFromTitle(titulo)
-    const nowIso = new Date().toISOString()
-
-    const { error } = await supabase
-      .from("viagens")
-      .update({ ciclo_id: novoCicloId, updated_at: nowIso })
-      .in("id", editingCicloViagemIds)
-
-    if (!error) {
-      setViagens((prev) =>
-        prev.map((item) =>
-          editingCicloViagemIds.includes(item.id)
-            ? { ...item, ciclo_id: novoCicloId, updated_at: nowIso }
-            : item,
-        ),
-      )
-      setIsDialogOpen(false)
-      setEditCicloTitulo("")
-      setEditingCicloId("")
-      setEditingCicloViagemIds([])
-    }
-
-    setIsLoading(false)
-  }
-
-  const handleDelete = (viagem: Viagem) => {
-    setSelectedViagem(viagem)
-    setIsDeleteDialogOpen(true)
-  }
-
-  const handleStatusChange = async (viagem: Viagem, newStatus: string) => {
-    const updates: Record<string, unknown> = { status: newStatus }
-
-    if (newStatus === "Em andamento" && !viagem.data_inicio) {
-      updates.data_inicio = new Date().toISOString()
-    }
-    if (newStatus === "Concluida" && !viagem.data_fim) {
-      updates.data_fim = new Date().toISOString()
-    }
-
-    const { error } = await supabase
-      .from("viagens")
-      .update(updates)
-      .eq("id", viagem.id)
-
-    if (!error) {
-      const updatedViagem = await fetchViagemWithPostos(viagem.id)
-      if (updatedViagem) {
-        setViagens(viagens.map(v => v.id === viagem.id ? updatedViagem : v))
-      }
-    }
-  }
-
-  const confirmDelete = async () => {
-    if (!selectedViagem) return
-
-    const { error } = await supabase
-      .from("viagens")
-      .delete()
-      .eq("id", selectedViagem.id)
-
-    if (!error) {
-      setViagens(viagens.filter(v => v.id !== selectedViagem.id))
-    }
-    setIsDeleteDialogOpen(false)
-    setSelectedViagem(null)
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
-
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
-      setIsLoading(false)
-      return
-    }
-
-    const viagemDataBase = {
-      ciclo_id: formData.ciclo_id.trim() || null,
-      cliente_id: formData.cliente_id || null,
-      veiculo_id: formData.veiculo_id || null,
-      motorista_id: formData.motorista_id || null,
-      rota_id: formData.rota_id || null,
-      rota_avulsa: formData.rota_avulsa,
-      origem_real: formData.origem_real || null,
-      destino_real: formData.destino_real || null,
-      data_inicio: formData.data_inicio ? new Date(formData.data_inicio).toISOString() : null,
-      data_fim: formData.data_fim ? new Date(formData.data_fim).toISOString() : null,
-      tipo_carga: formData.tipo_carga || null,
-      volume_toneladas: formData.volume_toneladas ? parseFloat(formData.volume_toneladas) : null,
-      km_real: formData.km_real ? parseFloat(formData.km_real) : null,
-      valor_frete: formData.valor_frete ? parseFloat(formData.valor_frete) : null,
-      status: formData.status as Viagem["status"],
-      user_id: user.id,
-      updated_at: new Date().toISOString(),
-    }
-
-    const viagemData = {
-      ...viagemDataBase,
-      planejamento_rota: toStoragePlanejamentoRota(formData.planejamento_rota),
-    }
-
-    const viagemDataBaseCompat = {
-      ...viagemDataBase,
-    }
-
-    delete (viagemDataBaseCompat as Record<string, unknown>).ciclo_id
-
-    const viagemDataCompat = {
-      ...viagemData,
-    }
-
-    delete (viagemDataCompat as Record<string, unknown>).ciclo_id
-
-    if (selectedViagem) {
-      let { error } = await supabase
-        .from("viagens")
-        .update(viagemData)
-        .eq("id", selectedViagem.id)
-
-      if (error) {
-        const errorMsg = error.message?.toLowerCase() || ""
-        if (errorMsg.includes("planejamento_rota") || errorMsg.includes("ciclo_id")) {
-          const retry = await supabase
-            .from("viagens")
-            .update(errorMsg.includes("planejamento_rota") ? viagemDataBaseCompat : viagemDataCompat)
-            .eq("id", selectedViagem.id)
-          error = retry.error
-        }
-      }
-
-      if (!error) {
-        const updatedViagem = await fetchViagemWithPostos(selectedViagem.id)
-        if (updatedViagem) {
-          setViagens(viagens.map(v => v.id === selectedViagem.id ? updatedViagem : v))
-        }
-      }
+  const openForm = (viagem?: Viagem) => {
+    if (viagem) {
+      setEditingViagem(viagem)
+      setFormData({
+        cliente_id: viagem.cliente_id || "",
+        veiculo_id: viagem.veiculo_id || "",
+        motorista_id: viagem.motorista_id || "",
+        rota_id: viagem.rota_id || "",
+        origem_real: viagem.origem_real || "",
+        destino_real: viagem.destino_real || "",
+        data_inicio: toDatetimeLocal(viagem.data_inicio),
+        data_fim: toDatetimeLocal(viagem.data_fim),
+        valor_frete: viagem.valor_frete?.toString() || "",
+        tipo_carga: viagem.tipo_carga || "",
+        status: viagem.status || "Planejada",
+      })
     } else {
-      let { data, error } = await supabase
-        .from("viagens")
-        .insert(viagemData)
-        .select("id")
-        .single()
-
-      if (error) {
-        const errorMsg = error.message?.toLowerCase() || ""
-        if (errorMsg.includes("planejamento_rota") || errorMsg.includes("ciclo_id")) {
-          const retry = await supabase
-            .from("viagens")
-            .insert(errorMsg.includes("planejamento_rota") ? viagemDataBaseCompat : viagemDataCompat)
-            .select("id")
-            .single()
-          data = retry.data
-          error = retry.error
-        }
-      }
-
-      if (!error && data) {
-        const newViagem = await fetchViagemWithPostos(data.id)
-        if (newViagem) {
-          setViagens([newViagem, ...viagens])
-        }
-      }
+      setEditingViagem(null)
+      setFormData({ cliente_id: "", veiculo_id: "", motorista_id: "", rota_id: "", origem_real: "", destino_real: "", data_inicio: "", data_fim: "", valor_frete: "", tipo_carga: "", status: "Planejada" })
     }
-
-    setIsLoading(false)
-    setIsDialogOpen(false)
-    resetForm()
+    setFormOpen(true)
   }
 
   const handleRotaSelect = (rotaId: string) => {
@@ -673,71 +143,88 @@ export function ViagensClient({
         rota_id: rotaId,
         origem_real: `${rota.origem_cidade}/${rota.origem_estado}`,
         destino_real: `${rota.destino_cidade}/${rota.destino_estado}`,
-        km_real: rota.km_planejado?.toString() || prev.km_real,
-        planejamento_rota: buildPlanejamentoRota(rota, prev.planejamento_rota),
       }))
+    } else {
+      setFormData(prev => ({ ...prev, rota_id: rotaId }))
     }
   }
 
-  const updatePlanejamentoIntermediario = (
-    index: number,
-    field: "chegada_planejada" | "partida_planejada",
-    value: string,
-  ) => {
-    setFormData((prev) => {
-      if (!prev.planejamento_rota) return prev
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setIsLoading(false); return }
 
-      const intermediarios = [...prev.planejamento_rota.intermediarios]
-      const current = intermediarios[index]
-      if (!current) return prev
+    const payload = {
+      cliente_id: formData.cliente_id || null,
+      veiculo_id: formData.veiculo_id || null,
+      motorista_id: formData.motorista_id || null,
+      rota_id: formData.rota_id || null,
+      origem_real: formData.origem_real || null,
+      destino_real: formData.destino_real || null,
+      data_inicio: formData.data_inicio ? new Date(formData.data_inicio).toISOString() : null,
+      data_fim: formData.data_fim ? new Date(formData.data_fim).toISOString() : null,
+      valor_frete: formData.valor_frete ? parseFloat(formData.valor_frete) : null,
+      tipo_carga: formData.tipo_carga || null,
+      status: formData.status as Viagem["status"],
+      updated_at: new Date().toISOString(),
+    }
 
-      intermediarios[index] = {
-        ...current,
-        [field]: value || null,
+    if (editingViagem) {
+      const { error } = await supabase.from("viagens").update(payload).eq("id", editingViagem.id)
+      if (!error) {
+        const updated = await fetchViagem(editingViagem.id)
+        if (updated) setViagens(prev => prev.map(v => v.id === editingViagem.id ? updated : v))
       }
-
-      return {
-        ...prev,
-        planejamento_rota: {
-          ...prev.planejamento_rota,
-          intermediarios,
-        },
+    } else {
+      const { data, error } = await supabase.from("viagens")
+        .insert({ ...payload, user_id: user.id, created_at: new Date().toISOString() })
+        .select("id").single()
+      if (!error && data) {
+        const nova = await fetchViagem(data.id)
+        if (nova) {
+          setViagens(prev => [nova, ...prev])
+          setFormOpen(false)
+          setIsLoading(false)
+          await handleOpenCockpit(data.id)
+          return
+        }
       }
-    })
+    }
+
+    setIsLoading(false)
+    setFormOpen(false)
   }
 
-  const handleOpenCockpitModal = async (viagemId: string) => {
+  const handleStatusChange = async (viagem: Viagem, status: string) => {
+    const updates: Record<string, unknown> = { status }
+    if (status === "Em andamento" && !viagem.data_inicio) updates.data_inicio = new Date().toISOString()
+    if (status === "Concluida" && !viagem.data_fim) updates.data_fim = new Date().toISOString()
+    const { error } = await supabase.from("viagens").update(updates).eq("id", viagem.id)
+    if (!error) {
+      const updated = await fetchViagem(viagem.id)
+      if (updated) setViagens(prev => prev.map(v => v.id === viagem.id ? updated : v))
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteViagem) return
+    const { error } = await supabase.from("viagens").delete().eq("id", deleteViagem.id)
+    if (!error) setViagens(prev => prev.filter(v => v.id !== deleteViagem.id))
+    setDeleteViagem(null)
+  }
+
+  const handleOpenCockpit = async (id: string) => {
     setCockpitOpen(true)
     setCockpitLoading(true)
-
     const [viagem, eventosRes, custosRes, receitasRes, documentosRes, parametrosRes] = await Promise.all([
-      fetchViagemWithPostos(viagemId),
-      supabase
-        .from("viagem_eventos")
-        .select("*")
-        .eq("viagem_id", viagemId)
-        .order("ocorrido_em", { ascending: false }),
-      supabase
-        .from("custos_viagem")
-        .select("*")
-        .eq("viagem_id", viagemId)
-        .order("data", { ascending: false }),
-      supabase
-        .from("receitas_viagem")
-        .select("*")
-        .eq("viagem_id", viagemId)
-        .order("data", { ascending: false }),
-      supabase
-        .from("viagem_documentos")
-        .select("*")
-        .eq("viagem_id", viagemId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("eta_parametros")
-        .select("*")
-        .eq("ativo", true),
+      fetchViagem(id),
+      supabase.from("viagem_eventos").select("*").eq("viagem_id", id).order("ocorrido_em", { ascending: false }),
+      supabase.from("custos_viagem").select("*").eq("viagem_id", id).order("data", { ascending: false }),
+      supabase.from("receitas_viagem").select("*").eq("viagem_id", id).order("data", { ascending: false }),
+      supabase.from("viagem_documentos").select("*").eq("viagem_id", id).order("created_at", { ascending: false }),
+      supabase.from("eta_parametros").select("*").eq("ativo", true),
     ])
-
     if (viagem) {
       setCockpitData({
         viagem,
@@ -747,285 +234,233 @@ export function ViagensClient({
         documentos: (documentosRes.data || []) as ViagemDocumento[],
         parametros: (parametrosRes.data || []) as EtaParametro[],
       })
-    } else {
-      setCockpitData(null)
     }
-
     setCockpitLoading(false)
   }
 
-  const ciclosResumo = useMemo<CicloResumo[]>(() => {
-    const grupos = new Map<string, Viagem[]>()
+  const tabs = [
+    { key: "todas", label: "Todas" },
+    { key: "andamento", label: "Em andamento" },
+    { key: "planejadas", label: "Planejadas" },
+    { key: "concluidas", label: "Concluídas" },
+  ]
 
-    for (const viagem of viagens) {
-      const cicloNormalizado = viagem.ciclo_id?.trim()
-      const cicloFallbackId = viagem.viagem_pai_id || viagem.id
-      const cicloKey = cicloNormalizado || `SEM-CICLO-${cicloFallbackId}`
-      const lista = grupos.get(cicloKey) || []
-      lista.push(viagem)
-      grupos.set(cicloKey, lista)
-    }
-
-    const getStatusCiclo = (lista: Viagem[]): CicloResumo["statusCiclo"] => {
-      const statuses = lista.map((item) => normalizeViagemStatus(item.status))
-      const somentePlanejadas = statuses.length > 0 && statuses.every((s) => s === "Planejada")
-      return somentePlanejadas ? "Planeado" : "Realizado"
-    }
-
-    const sorted = Array.from(grupos.entries()).map(([cicloId, lista]) => {
-      const viagensOrdenadas = [...lista].sort((a, b) => {
-        const aTs = new Date(a.data_inicio || a.created_at).getTime()
-        const bTs = new Date(b.data_inicio || b.created_at).getTime()
-        return bTs - aTs
-      })
-      const viagemDestaque =
-        viagensOrdenadas.find((item) => normalizeViagemStatus(item.status) === "Em andamento") ||
-        viagensOrdenadas.find((item) => normalizeViagemStatus(item.status) === "Planejada") ||
-        viagensOrdenadas[0]
-
-      return {
-        cicloId,
-        viagens: viagensOrdenadas,
-        viagemDestaque,
-        statusCiclo: getStatusCiclo(viagensOrdenadas),
-        valorTotal: viagensOrdenadas.reduce((sum, item) => sum + Number(item.valor_frete || 0), 0),
-        kmTotal: viagensOrdenadas.reduce((sum, item) => sum + Number(item.km_real || 0), 0),
-      }
-    })
-
-    return sorted.sort((a, b) => {
-      const aTs = new Date(a.viagemDestaque.data_inicio || a.viagemDestaque.created_at).getTime()
-      const bTs = new Date(b.viagemDestaque.data_inicio || b.viagemDestaque.created_at).getTime()
-      return bTs - aTs
-    })
-  }, [viagens])
-
-  const ciclosFiltrados = ciclosResumo.filter((ciclo) => {
+  const viagensFiltradas = useMemo(() => {
     const termo = search.toLowerCase()
-    const matchesSearch =
-      ciclo.cicloId.toLowerCase().includes(termo) ||
-      ciclo.viagens.some((v) =>
-        v.cliente?.nome?.toLowerCase().includes(termo) ||
-        v.motorista?.nome?.toLowerCase().includes(termo) ||
-        v.veiculo?.placa_cavalo?.toLowerCase().includes(termo) ||
-        v.origem_real?.toLowerCase().includes(termo) ||
-        v.destino_real?.toLowerCase().includes(termo),
-      )
+    return viagens
+      .filter(v => {
+        const matchSearch =
+          !termo ||
+          v.cliente?.nome?.toLowerCase().includes(termo) ||
+          v.motorista?.nome?.toLowerCase().includes(termo) ||
+          v.veiculo?.placa_cavalo?.toLowerCase().includes(termo) ||
+          v.origem_real?.toLowerCase().includes(termo) ||
+          v.destino_real?.toLowerCase().includes(termo) ||
+          v.tipo_carga?.toLowerCase().includes(termo)
+        if (!matchSearch) return false
+        const status = normalizeStatus(v.status)
+        if (activeTab === "andamento") return status === "Em andamento"
+        if (activeTab === "planejadas") return status === "Planejada"
+        if (activeTab === "concluidas") return status === "Concluida"
+        return true
+      })
+      .sort((a, b) => new Date(b.data_inicio || b.created_at).getTime() - new Date(a.data_inicio || a.created_at).getTime())
+  }, [viagens, search, activeTab])
 
-    if (activeTab === "todas") return matchesSearch
-    if (activeTab === "planeados") return matchesSearch && ciclo.statusCiclo === "Planeado"
-    if (activeTab === "realizados") return matchesSearch && ciclo.statusCiclo === "Realizado"
-    return matchesSearch
-  })
+  const contagens = useMemo(() => ({
+    todas: viagens.length,
+    andamento: viagens.filter(v => normalizeStatus(v.status) === "Em andamento").length,
+    planejadas: viagens.filter(v => normalizeStatus(v.status) === "Planejada").length,
+    concluidas: viagens.filter(v => normalizeStatus(v.status) === "Concluida").length,
+  }), [viagens])
 
   return (
     <div className="space-y-5">
-      {/* Page Header */}
+      {/* Header */}
       <div className="page-header">
         <div>
-          <h1 className="page-title">Ciclos de Viagem</h1>
-          <p className="page-subtitle">Gerencie os ciclos e operações da transportadora</p>
+          <h1 className="page-title">Viagens</h1>
+          <p className="page-subtitle">Gerencie e acompanhe todas as viagens</p>
         </div>
-        <Button onClick={handleAdd} size="sm" className="gap-1.5">
+        <Button onClick={() => openForm()} size="sm" className="gap-1.5 gradient-primary font-semibold">
           <Plus className="h-4 w-4" />
-          Novo Ciclo
+          Nova Viagem
         </Button>
       </div>
 
-      {/* Search + Tabs bar */}
-      <div className="bg-card rounded-xl border border-border/60 shadow-sm">
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60">
-          <div className="relative flex-1 max-w-xs">
+      {/* Card principal */}
+      <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+        {/* Barra de busca + tabs */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
-              placeholder="Buscar por cliente, motorista, rota..."
+              placeholder="Buscar cliente, motorista, placa, rota..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 h-8 text-sm"
             />
           </div>
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground tabular">{ciclosFiltrados.length}</span>
-            ciclo(s)
+          <div className="flex items-center gap-1 ml-auto">
+            {tabs.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeTab === tab.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+              >
+                {tab.label}
+                <span className={`ml-1.5 tabular-nums ${activeTab === tab.key ? "opacity-70" : "opacity-60"}`}>
+                  {contagens[tab.key as keyof typeof contagens]}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <div className="px-4 pt-2 pb-0">
-            <TabsList className="h-8 bg-muted/50">
-              <TabsTrigger value="todas" className="text-xs h-7">
-                Todos <span className="ml-1.5 tabular font-semibold">{ciclosResumo.length}</span>
-              </TabsTrigger>
-              <TabsTrigger value="planeados" className="text-xs h-7">
-                Planejados <span className="ml-1.5 tabular font-semibold">{ciclosResumo.filter(c => c.statusCiclo === "Planeado").length}</span>
-              </TabsTrigger>
-              <TabsTrigger value="realizados" className="text-xs h-7">
-                Realizados <span className="ml-1.5 tabular font-semibold">{ciclosResumo.filter(c => c.statusCiclo === "Realizado").length}</span>
-              </TabsTrigger>
-            </TabsList>
-          </div>
-
-          <TabsContent value={activeTab} className="p-4 pt-3">
-            {ciclosFiltrados.length > 0 ? (
-              <div className="space-y-2">
-                {ciclosFiltrados.map((ciclo) => {
-                  const viagem = ciclo.viagemDestaque
-                  const statusNorm = normalizeViagemStatus(viagem.status)
-                  return (
-                    <div
-                      key={ciclo.cicloId}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleOpenCockpitModal(viagem.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault()
-                          handleOpenCockpitModal(viagem.id)
-                        }
-                      }}
-                      className="group flex items-center gap-4 p-4 rounded-lg border border-border/60 bg-background hover:border-primary/40 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-150 cursor-pointer"
-                    >
-                      {/* Status dot + icon */}
-                      <div className="flex-shrink-0">
-                        <div className={`h-10 w-10 rounded-lg flex items-center justify-center transition-colors ${
-                          statusNorm === "Em andamento" ? "bg-blue-100" :
-                          statusNorm === "Concluida" ? "bg-emerald-100" :
-                          statusNorm === "Cancelada" ? "bg-rose-100" : "bg-slate-100"
-                        }`}>
-                          <Truck className={`h-5 w-5 ${
-                            statusNorm === "Em andamento" ? "text-blue-600" :
-                            statusNorm === "Concluida" ? "text-emerald-600" :
-                            statusNorm === "Cancelada" ? "text-rose-600" : "text-slate-500"
-                          }`} />
-                        </div>
-                      </div>
-
-                      {/* Main info */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <span className="text-sm font-semibold text-foreground truncate max-w-xs">{ciclo.cicloId}</span>
-                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border flex-shrink-0 ${statusColors[ciclo.statusCiclo] || "badge-planejada"}`}>
-                            {ciclo.statusCiclo}
-                          </span>
-                          {ciclo.viagens.length > 1 && (
-                            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border flex-shrink-0">
-                              {ciclo.viagens.length} etapas
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                          {viagem.cliente?.nome && (
-                            <span className="flex items-center gap-1">
-                              <Users className="h-3 w-3" />{viagem.cliente.nome}
-                            </span>
-                          )}
-                          {viagem.motorista?.nome && (
-                            <span className="flex items-center gap-1">
-                              <User className="h-3 w-3" />{viagem.motorista.nome}
-                            </span>
-                          )}
-                          {viagem.veiculo?.placa_cavalo && (
-                            <span className="flex items-center gap-1">
-                              <Truck className="h-3 w-3" />{viagem.veiculo.placa_cavalo}
-                            </span>
-                          )}
-                          {viagem.data_inicio && (
-                            <span className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />{formatDate(viagem.data_inicio)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Values */}
-                      <div className="text-right flex-shrink-0 hidden sm:block">
-                        <p className="text-sm font-bold text-foreground tabular">
-                          {ciclo.valorTotal > 0 ? formatCurrency(ciclo.valorTotal) : "—"}
-                        </p>
-                        <p className="text-xs text-muted-foreground tabular">
-                          {ciclo.kmTotal ? `${ciclo.kmTotal.toLocaleString("pt-BR")} km` : "—"}
-                        </p>
-                      </div>
-
-                      {/* Actions */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => event.stopPropagation()}
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-                          <DropdownMenuItem onClick={() => handleEdit(ciclo)}>
-                            <Pencil className="h-4 w-4 mr-2" />Editar ciclo
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          {statusNorm === "Em andamento" && (
-                            <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Concluida")}>
-                              <CheckCircle className="h-4 w-4 mr-2 text-emerald-600" />Concluir
-                            </DropdownMenuItem>
-                          )}
-                          {statusNorm !== "Cancelada" && statusNorm !== "Concluida" && (
-                            <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Cancelada")}>
-                              <XCircle className="h-4 w-4 mr-2 text-rose-600" />Cancelar
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={() => handleDelete(viagem)}
-                            className="text-destructive focus:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />Excluir
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="py-14 text-center">
-                <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center mx-auto mb-3">
-                  <Route className="h-6 w-6 text-muted-foreground/50" />
-                </div>
-                <p className="text-sm font-medium text-foreground mb-1">Nenhum ciclo encontrado</p>
-                <p className="text-xs text-muted-foreground mb-4">
-                  {search ? "Tente outros termos de busca" : "Crie o primeiro ciclo de viagem"}
-                </p>
-                {!search && (
-                  <Button size="sm" onClick={handleAdd} className="gap-1.5">
-                    <Plus className="h-4 w-4" />Novo Ciclo
-                  </Button>
-                )}
-              </div>
+        {/* Lista */}
+        {viagensFiltradas.length === 0 ? (
+          <div className="py-16 text-center">
+            <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center mx-auto mb-3">
+              <Route className="h-6 w-6 text-muted-foreground/50" />
+            </div>
+            <p className="text-sm font-medium text-foreground mb-1">Nenhuma viagem encontrada</p>
+            <p className="text-xs text-muted-foreground mb-4">
+              {search ? "Tente outros termos de busca" : "Crie a primeira viagem"}
+            </p>
+            {!search && (
+              <Button size="sm" onClick={() => openForm()} className="gap-1.5">
+                <Plus className="h-4 w-4" />Nova Viagem
+              </Button>
             )}
-          </TabsContent>
-        </Tabs>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/50">
+            {viagensFiltradas.map((viagem) => {
+              const status = normalizeStatus(viagem.status)
+              const cfg = statusConfig[status] || statusConfig["Planejada"]
+              const rota = [viagem.origem_real, viagem.destino_real].filter(Boolean).join(" → ")
+              return (
+                <div
+                  key={viagem.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleOpenCockpit(viagem.id)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleOpenCockpit(viagem.id) } }}
+                  className="group flex items-center gap-4 px-4 py-3.5 hover:bg-primary/[0.03] transition-colors cursor-pointer"
+                >
+                  {/* Status icon */}
+                  <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${cfg.bg}`}>
+                    <Truck className={`h-4 w-4 ${cfg.text}`} />
+                  </div>
+
+                  {/* Info principal */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${cfg.bg} ${cfg.text}`}>
+                        <span className={`size-1.5 rounded-full ${cfg.dot}`} />
+                        {cfg.label}
+                      </span>
+                      {viagem.cliente?.nome && (
+                        <span className="text-sm font-semibold text-foreground truncate">{viagem.cliente.nome}</span>
+                      )}
+                      {!viagem.cliente?.nome && rota && (
+                        <span className="text-sm font-semibold text-foreground truncate">{rota}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+                      {viagem.cliente?.nome && rota && (
+                        <span className="flex items-center gap-1">
+                          <MapPin className="h-3 w-3 shrink-0" />
+                          <span className="truncate max-w-[200px]">{rota}</span>
+                        </span>
+                      )}
+                      {viagem.motorista?.nome && (
+                        <span className="flex items-center gap-1">
+                          <User className="h-3 w-3 shrink-0" />{viagem.motorista.nome.split(" ")[0]}
+                        </span>
+                      )}
+                      {viagem.veiculo?.placa_cavalo && (
+                        <span className="flex items-center gap-1">
+                          <Truck className="h-3 w-3 shrink-0" />{viagem.veiculo.placa_cavalo}
+                        </span>
+                      )}
+                      {viagem.data_inicio && (
+                        <span className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3 shrink-0" />{formatDate(viagem.data_inicio)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Frete */}
+                  {viagem.valor_frete ? (
+                    <div className="text-right shrink-0 hidden sm:block">
+                      <p className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(Number(viagem.valor_frete))}</p>
+                      <p className="text-[10px] text-muted-foreground">frete</p>
+                    </div>
+                  ) : null}
+
+                  {/* Seta + menu */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuItem onClick={() => openForm(viagem)}>
+                          <Pencil className="h-4 w-4 mr-2" />Editar viagem
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {status === "Planejada" && (
+                          <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Em andamento")}>
+                            <Truck className="h-4 w-4 mr-2 text-blue-600" />Iniciar viagem
+                          </DropdownMenuItem>
+                        )}
+                        {status === "Em andamento" && (
+                          <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Concluida")}>
+                            <CheckCircle className="h-4 w-4 mr-2 text-emerald-600" />Concluir viagem
+                          </DropdownMenuItem>
+                        )}
+                        {status !== "Cancelada" && status !== "Concluida" && (
+                          <DropdownMenuItem onClick={() => handleStatusChange(viagem, "Cancelada")}>
+                            <XCircle className="h-4 w-4 mr-2 text-rose-600" />Cancelar
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onClick={() => setDeleteViagem(viagem)}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />Excluir
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* Cockpit Modal */}
-      <Dialog
-        open={cockpitOpen}
-        onOpenChange={(open) => {
-          setCockpitOpen(open)
-          if (!open) { setCockpitData(null); setCockpitLoading(false) }
-        }}
-      >
+      <Dialog open={cockpitOpen} onOpenChange={(open) => { setCockpitOpen(open); if (!open) { setCockpitData(null); setCockpitLoading(false) } }}>
         <DialogContent className="!w-[97vw] !max-w-[97vw] h-[95vh] overflow-hidden p-0 rounded-xl">
-          <DialogHeader className="sr-only">
-            <DialogTitle>Cockpit da Viagem</DialogTitle>
-          </DialogHeader>
-          <div className="h-full min-h-0 flex flex-col">
+          <DialogHeader className="sr-only"><DialogTitle>Cockpit da Viagem</DialogTitle></DialogHeader>
+          <div className="h-full flex flex-col">
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-background">
               {cockpitLoading && (
                 <div className="h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
-                  <div className="h-8 w-8 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
-                  <p className="text-sm">Carregando cockpit...</p>
+                  <Loader2 className="h-7 w-7 animate-spin text-primary" />
+                  <p className="text-sm">Carregando viagem...</p>
                 </div>
               )}
               {!cockpitLoading && cockpitData && (
@@ -1041,7 +476,7 @@ export function ViagensClient({
               )}
               {!cockpitLoading && !cockpitData && (
                 <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                  Não foi possível carregar os dados da viagem.
+                  Não foi possível carregar a viagem.
                 </div>
               )}
             </div>
@@ -1049,126 +484,136 @@ export function ViagensClient({
         </DialogContent>
       </Dialog>
 
-      {/* Novo Ciclo Dialog */}
-      <Dialog open={isNovoCicloDialogOpen} onOpenChange={setIsNovoCicloDialogOpen}>
-        <DialogContent className="w-[95vw] max-w-md">
-          <DialogHeader>
-            <DialogTitle>Novo Ciclo de Viagem</DialogTitle>
+      {/* Nova / Editar Viagem */}
+      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingViagem(null) }}>
+        <DialogContent className="max-w-lg p-0 overflow-hidden">
+          <DialogHeader style={{ background: "linear-gradient(135deg, oklch(0.13 0.045 265) 0%, oklch(0.18 0.04 260) 100%)", padding: "1.25rem 1.5rem 1rem" }}>
+            <DialogTitle className="text-xl font-bold text-white">{editingViagem ? "Editar Viagem" : "Nova Viagem"}</DialogTitle>
+            <p className="text-xs text-white/50 mt-0.5">{editingViagem ? "Atualize os dados da viagem" : "Preencha os dados para iniciar a viagem"}</p>
           </DialogHeader>
-          <form onSubmit={handleCreateCycle} className="space-y-4 pt-1">
-            <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Nome do ciclo</Label>
-              <Input
-                value={novoCicloTitulo}
-                onChange={(e) => setNovoCicloTitulo(e.target.value)}
-                placeholder="Ex: Saúde Belém → Xinguara"
-                autoFocus
-                className="h-9"
-              />
-              <p className="text-xs text-muted-foreground">
-                Um ID técnico será gerado automaticamente.
-              </p>
+          <form onSubmit={handleSubmit} className="p-5 space-y-3">
+            {/* Operação */}
+            <div className="rounded-xl border border-blue-200/70 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50/60 border-b border-blue-200/60">
+                <div className="size-1.5 rounded-full bg-blue-500" />
+                <p className="text-[11px] font-bold uppercase tracking-widest text-blue-700">Operação</p>
+              </div>
+              <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Cliente</Label>
+                  <Select value={formData.cliente_id} onValueChange={v => setFormData(p => ({ ...p, cliente_id: v }))}>
+                    <SelectTrigger className="mt-1.5 text-sm h-9"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                    <SelectContent>{clientes.map(c => <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Veículo</Label>
+                  <Select value={formData.veiculo_id} onValueChange={v => setFormData(p => ({ ...p, veiculo_id: v }))}>
+                    <SelectTrigger className="mt-1.5 text-sm h-9"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                    <SelectContent>{veiculos.map(v => <SelectItem key={v.id} value={v.id}>{v.placa_cavalo || "Sem placa"}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Motorista</Label>
+                  <Select value={formData.motorista_id} onValueChange={v => setFormData(p => ({ ...p, motorista_id: v }))}>
+                    <SelectTrigger className="mt-1.5 text-sm h-9"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                    <SelectContent>{motoristas.map(m => <SelectItem key={m.id} value={m.id}>{m.nome}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
+
+            {/* Rota */}
+            <div className="rounded-xl border border-emerald-200/70 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50/60 border-b border-emerald-200/60">
+                <div className="size-1.5 rounded-full bg-emerald-500" />
+                <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-700">Rota</p>
+              </div>
+              <div className="p-4 space-y-3">
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Rota cadastrada</Label>
+                  <Select value={formData.rota_id} onValueChange={handleRotaSelect}>
+                    <SelectTrigger className="mt-1.5 text-sm h-9"><SelectValue placeholder="Selecione ou preencha manualmente" /></SelectTrigger>
+                    <SelectContent>{rotas.map(r => <SelectItem key={r.id} value={r.id}>{r.nome}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Origem</Label>
+                    <Input className="mt-1.5 text-sm h-9" value={formData.origem_real} onChange={e => setFormData(p => ({ ...p, origem_real: e.target.value }))} placeholder="Cidade/UF" />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-semibold text-muted-foreground">Destino</Label>
+                    <Input className="mt-1.5 text-sm h-9" value={formData.destino_real} onChange={e => setFormData(p => ({ ...p, destino_real: e.target.value }))} placeholder="Cidade/UF" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Agenda + Frete */}
+            <div className="rounded-xl border border-violet-200/70 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
+                <div className="size-1.5 rounded-full bg-violet-500" />
+                <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Agenda & Frete</p>
+              </div>
+              <div className="p-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Partida</Label>
+                  <Input type="datetime-local" className="mt-1.5 text-sm h-9" value={formData.data_inicio} onChange={e => setFormData(p => ({ ...p, data_inicio: e.target.value }))} />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Chegada</Label>
+                  <Input type="datetime-local" className="mt-1.5 text-sm h-9" value={formData.data_fim} onChange={e => setFormData(p => ({ ...p, data_fim: e.target.value }))} />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Valor frete</Label>
+                  <Input type="number" step="0.01" className="mt-1.5 text-sm h-9" value={formData.valor_frete} onChange={e => setFormData(p => ({ ...p, valor_frete: e.target.value }))} placeholder="R$" />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Status</Label>
+                  <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                    <SelectTrigger className="mt-1.5 text-sm h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Planejada">Planejada</SelectItem>
+                      <SelectItem value="Em andamento">Em andamento</SelectItem>
+                      <SelectItem value="Concluida">Concluída</SelectItem>
+                      <SelectItem value="Cancelada">Cancelada</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
             <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" variant="outline" size="sm" onClick={() => setIsNovoCicloDialogOpen(false)}>
-                Cancelar
-              </Button>
-              <Button type="submit" size="sm" disabled={isCreatingCycle || !novoCicloTitulo.trim()}>
-                {isCreatingCycle ? "Criando..." : "Criar e abrir cockpit"}
+              <Button type="button" variant="outline" className="h-9" onClick={() => setFormOpen(false)}>Cancelar</Button>
+              <Button type="submit" className="h-9 gradient-primary font-semibold" disabled={isLoading}>
+                {isLoading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
+                {editingViagem ? "Salvar" : "Criar viagem"}
               </Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* Editar Ciclo Dialog */}
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="w-[95vw] max-w-md">
-          <DialogHeader>
-            <DialogTitle>Editar ciclo</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleSaveCycleTitle} className="space-y-4 pt-1">
-            <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Nome do ciclo</Label>
-              <Input
-                value={editCicloTitulo}
-                onChange={(e) => setEditCicloTitulo(e.target.value)}
-                placeholder="Ex: Saúde Belém → Xinguara"
-                autoFocus
-                className="h-9"
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" variant="outline" size="sm" onClick={() => setIsDialogOpen(false)}>
-                Cancelar
-              </Button>
-              <Button type="submit" size="sm" disabled={isLoading}>
-                {isLoading ? "Salvando..." : "Salvar"}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation */}
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+      {/* Confirmar exclusão */}
+      <AlertDialog open={!!deleteViagem} onOpenChange={(open) => { if (!open) setDeleteViagem(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta ação removerá a viagem permanentemente e não pode ser desfeita.
-            </AlertDialogDescription>
+            <AlertDialogTitle>Excluir viagem?</AlertDialogTitle>
+            <AlertDialogDescription>Esta ação não pode ser desfeita.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Excluir
-            </AlertDialogAction>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">Excluir</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Quick Register Modals */}
-      <QuickClienteModal
-        open={quickClienteOpen}
-        onOpenChange={setQuickClienteOpen}
-        onCreated={(c) => {
-          setClientes(prev => [...prev, c])
-          setFormData(prev => ({ ...prev, cliente_id: c.id }))
-        }}
-      />
-      <QuickVeiculoModal
-        open={quickVeiculoOpen}
-        onOpenChange={setQuickVeiculoOpen}
-        onCreated={(v) => {
-          setVeiculos(prev => [...prev, v])
-          setFormData(prev => ({ ...prev, veiculo_id: v.id }))
-        }}
-      />
-      <QuickMotoristaModal
-        open={quickMotoristaOpen}
-        onOpenChange={setQuickMotoristaOpen}
-        onCreated={(m) => {
-          setMotoristas(prev => [...prev, m])
-          setFormData(prev => ({ ...prev, motorista_id: m.id }))
-        }}
-      />
-      <QuickRotaModal
-        open={quickRotaOpen}
-        onOpenChange={setQuickRotaOpen}
-        onCreated={(r) => {
-          setRotas(prev => [...prev, r])
-          setFormData(prev => ({
-            ...prev,
-            rota_id: r.id,
-            origem_real: `${r.origem_cidade}/${r.origem_estado}`,
-            destino_real: `${r.destino_cidade}/${r.destino_estado}`,
-            km_real: r.km_planejado?.toString() || prev.km_real,
-            planejamento_rota: buildPlanejamentoRota(r, prev.planejamento_rota),
-          }))
-        }}
-      />
-
+      {/* Quick Modals */}
+      <QuickClienteModal open={quickClienteOpen} onOpenChange={setQuickClienteOpen} onCreated={(c) => { setClientes(p => [...p, c]); setFormData(p => ({ ...p, cliente_id: c.id })) }} />
+      <QuickVeiculoModal open={quickVeiculoOpen} onOpenChange={setQuickVeiculoOpen} onCreated={(v) => { setVeiculos(p => [...p, v]); setFormData(p => ({ ...p, veiculo_id: v.id })) }} />
+      <QuickMotoristaModal open={quickMotoristaOpen} onOpenChange={setQuickMotoristaOpen} onCreated={(m) => { setMotoristas(p => [...p, m]); setFormData(p => ({ ...p, motorista_id: m.id })) }} />
+      <QuickRotaModal open={quickRotaOpen} onOpenChange={setQuickRotaOpen} onCreated={(r) => { setRotas(p => [...p, r]); handleRotaSelect(r.id) }} />
     </div>
   )
 }

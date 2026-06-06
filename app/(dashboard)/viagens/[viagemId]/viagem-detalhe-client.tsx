@@ -3945,56 +3945,14 @@ export function ViagemDetalheClient({
                 <div className="px-5 pt-4 pb-3 border-b border-border/60 bg-muted/20">
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Eventos do Ciclo</h3>
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Eventos da Viagem</h3>
                       <span className="text-xs font-mono text-muted-foreground border border-border/60 rounded px-2 py-0.5 bg-muted/40">
                         {viagemLabel}
                       </span>
                       {viagemFechada && (
-                        <Badge className={`text-xs ${cicloFechado ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
-                          {cicloFechado ? "Fechamento de ciclo" : "Fechamento de viagem"} · {(subViagemAtiva?.data_fim || viagemState.data_fim) ? new Date((subViagemAtiva?.data_fim || viagemState.data_fim) as string).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                        <Badge className="text-xs bg-emerald-100 text-emerald-800 border-emerald-200">
+                          Concluída · {viagemState.data_fim ? new Date(viagemState.data_fim).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
                         </Badge>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs gap-1.5 border-border/70"
-                        onClick={() => { prepararNovaViagemForm(); setNovaViagemModalOpen(true) }}
-                        disabled={loading}
-                      >
-                        {loading ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" />}
-                        Nova viagem
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-7 text-xs gap-1.5"
-                        onClick={() => {
-                          setOperacaoViagemTipo("fechar")
-                          setViagemOperacaoId(subViagemAtivaId || opcoesFecharViagem[0]?.id || viagemState.id)
-                          setOperacaoViagemModalOpen(true)
-                        }}
-                        disabled={loading || opcoesFecharViagem.length === 0}
-                      >
-                        Fechar viagem
-                      </Button>
-                      {opcoesReabrirViagem.length > 0 && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs gap-1.5 border-border/70"
-                          onClick={() => {
-                            setOperacaoViagemTipo("reabrir")
-                            setViagemOperacaoId(opcoesReabrirViagem[0]?.id || "")
-                            setOperacaoViagemModalOpen(true)
-                          }}
-                          disabled={loading}
-                        >
-                          Reabrir
-                        </Button>
                       )}
                     </div>
                   </div>
@@ -4224,18 +4182,10 @@ export function ViagemDetalheClient({
               <div className="order-1 grid grid-cols-1 gap-2">
                 <div className="space-y-3">
                   <div className="sticky top-2 z-10 bg-card border border-border/60 rounded-xl shadow-sm overflow-hidden">
-                    {/* Gradient header strip */}
+                    {/* Header */}
                     <div className="bg-gradient-to-r from-primary/10 via-primary/5 to-transparent px-4 py-2.5 border-b border-border/50">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-xs font-bold tracking-widest uppercase text-primary">Ciclo Operacional</h2>
-                          {subViagemAtivaId && <Badge className="bg-blue-100 text-blue-800 border-blue-200 text-[10px]">Sub-viagem ativa</Badge>}
-                          {subViagensCarregadas.length > 0 && !subViagemAtivaId && (
-                            <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-[10px]">{subViagensCarregadas.length} sub-viagem(s)</Badge>
-                          )}
-                          {cicloFechado && <Badge className="bg-red-100 text-red-800 border-red-200 text-[10px]">Ciclo fechado</Badge>}
-                        </div>
-                        {/* KPI chips inline */}
+                        <h2 className="text-xs font-bold tracking-widest uppercase text-primary">Resumo da Viagem</h2>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 text-[11px] text-emerald-700">
                             <span className="font-normal opacity-60">Receita</span>
@@ -4248,10 +4198,6 @@ export function ViagemDetalheClient({
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] ${lucro >= 0 ? "bg-emerald-50 border-emerald-200/70 text-emerald-700" : "bg-red-50 border-red-200/70 text-red-700"}`}>
                             <span className="font-normal opacity-60">Margem</span>
                             <span className="font-bold">{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</span>
-                          </span>
-                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] ${healthScore >= 70 ? "bg-emerald-50 border-emerald-200/70 text-emerald-700" : healthScore >= 40 ? "bg-amber-50 border-amber-200/70 text-amber-700" : "bg-red-50 border-red-200/70 text-red-700"}`}>
-                            <span className="font-normal opacity-60">Health</span>
-                            <span className="font-bold">{healthScore}</span>
                           </span>
                         </div>
                       </div>
@@ -4268,12 +4214,7 @@ export function ViagemDetalheClient({
                             <span className="truncate max-w-[40%] text-right">{destinoOperacionalLabel}</span>
                           </div>
                           <div className="h-2 rounded-full bg-muted overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all duration-500 ${
-                                progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-primary" : "bg-muted-foreground/40"
-                              }`}
-                              style={{ width: `${progressoRotaPercent}%` }}
-                            />
+                            <div className={`h-full rounded-full transition-all duration-500 ${progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-primary" : "bg-muted-foreground/40"}`} style={{ width: `${progressoRotaPercent}%` }} />
                           </div>
                           <p className="text-[10px] text-muted-foreground mt-1">
                             {kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km` : "0 km"} percorridos
@@ -4281,38 +4222,22 @@ export function ViagemDetalheClient({
                           </p>
                         </div>
                       )}
-
-                      {subViagemAtivaId && (
-                        <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setSubViagemAtivaId(null)}>
-                          ← Voltar para viagem principal
-                        </Button>
-                      )}
-
-                      {/* Dados operacionais */}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-xs">
-                        <p className="text-muted-foreground">Ciclo: <span className="font-semibold text-foreground">{cicloLabel}</span></p>
-                        <p className="text-muted-foreground">Veículo: <span className="font-semibold text-foreground">{veiculoAtual?.placa_cavalo || "A DEFINIR"}</span></p>
-                        <p className="text-muted-foreground">Motorista: <span className="font-semibold text-foreground">{motoristaAtual?.nome || "A DEFINIR"}</span></p>
-                        <p className="text-muted-foreground col-span-2 sm:col-span-1 truncate">ID: <span className="font-semibold text-foreground font-mono">{cicloIdReferencia}</span></p>
+                      {/* Info operacional */}
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                        <p className="text-muted-foreground">Veículo: <span className="font-semibold text-foreground">{veiculoAtual?.placa_cavalo || "—"}</span></p>
+                        <p className="text-muted-foreground">Motorista: <span className="font-semibold text-foreground">{motoristaAtual?.nome?.split(" ")[0] || "—"}</span></p>
                         <p className="text-muted-foreground">Docs: <span className="font-semibold text-foreground">{documentos.length}</span></p>
+                        <p className="text-muted-foreground">Eventos: <span className="font-semibold text-foreground">{eventosRealizados.length}</span></p>
                       </div>
-
-                      {/* Marco atual */}
-                      <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 space-y-1">
-                        <p className="text-xs text-muted-foreground">
-                          <span className="font-semibold text-foreground">Marco atual:</span>{" "}
-                          {ultimoMarco ? `${eventTypeLabels[ultimoMarco.tipo_evento]} · ${ultimoMarco.local || "A DEFINIR"} · ${formatDateTime(ultimoMarco.ocorrido_em)}` : "Nenhum evento registrado"}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          <span className="font-semibold text-foreground">Próximo:</span>{" "}
-                          {proximaAcaoTitulo} — {formatDateTime(proximaAcaoPrevisao)}
-                          {" · "}Retorno: {viagemContexto.destino_real ? "Definido" : "Em aberto"}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          <span className="font-semibold text-foreground">Previsão destino:</span>{" "}
-                          {formatDateTime(previsaoChegadaDestino)}
-                        </p>
-                      </div>
+                      {/* Último evento */}
+                      {ultimoMarco && (
+                        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                          <p className="text-xs text-muted-foreground">
+                            <span className="font-semibold text-foreground">Último evento:</span>{" "}
+                            {eventTypeLabels[ultimoMarco.tipo_evento]} · {ultimoMarco.local || "—"} · {formatDateTime(ultimoMarco.ocorrido_em)}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
 

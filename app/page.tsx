@@ -11,3 +11,4 @@ export default async function Home() {
     redirect("/auth/login")
   }
 }
+  
