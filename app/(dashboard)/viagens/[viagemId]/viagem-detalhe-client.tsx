@@ -1,22 +1,15 @@
 "use client"
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import {
   ArrowLeft,
   ArrowRightLeft,
-  Camera,
-  Circle,
   Clock3,
-  FileText,
   Fuel,
   Loader2,
   MapPin,
-  MoreHorizontal,
-  Pencil,
   Plus,
-  Route,
-  Trash2,
   TriangleAlert,
   Wrench,
 } from "lucide-react"
@@ -75,13 +68,7 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+
 
 interface ViagemDetalheClientProps {
   viagem: Viagem
@@ -176,10 +163,8 @@ function getFechamentoEventoStorageKey(viagemId: string) {
 const cockpitQuickActions: CockpitQuickAction[] = [
   { label: "Chegada", type: "chegada", status: "concluido", title: "Chegada" },
   { label: "Saída", type: "saida", status: "concluido", title: "Saída" },
-  { label: "Parada", type: "parada", status: "em_andamento", title: "Parada" },
   { label: "Abastecimento", type: "abastecimento", status: "concluido", title: "Abastecimento" },
   { label: "Manutenção", type: "manutencao" as any, status: "concluido", title: "Manutenção" },
-  { label: "Documentação", type: "ocorrencia", status: "pendente", title: "Documentação" },
 ]
 
 const metodosPagamentoBrasil = [
@@ -3938,23 +3923,112 @@ export function ViagemDetalheClient({
           <TabsTrigger className="rounded-lg px-5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm" value="kpis">KPIs</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="operacao" className="space-y-4 min-h-0">
-          <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-4">
-            <div className="flex flex-col gap-3 min-w-0">
-              <div className="order-2 bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
-                <div className="px-5 pt-4 pb-3 border-b border-border/60 bg-muted/20">
-                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Eventos da Viagem</h3>
-                      <span className="text-xs font-mono text-muted-foreground border border-border/60 rounded px-2 py-0.5 bg-muted/40">
-                        {viagemLabel}
-                      </span>
-                      {viagemFechada && (
-                        <Badge className="text-xs bg-emerald-100 text-emerald-800 border-emerald-200">
-                          Concluída · {viagemState.data_fim ? new Date(viagemState.data_fim).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
-                        </Badge>
-                      )}
+        <TabsContent value="operacao" className="min-h-0">
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-3 items-start">
+
+            {/* ── LEFT: info bar + events table ── */}
+            <div className="space-y-3 min-w-0">
+
+              {/* Viagem info card */}
+              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                <div style={{ background: "linear-gradient(135deg, oklch(0.13 0.045 265) 0%, oklch(0.18 0.04 260) 100%)" }} className="px-5 py-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`shrink-0 h-8 w-1.5 rounded-full ${viagemFechada ? "bg-emerald-400" : "bg-blue-400"}`} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide ${viagemFechada ? "bg-emerald-500/20 text-emerald-300" : "bg-blue-500/20 text-blue-300"}`}>
+                            {viagemFechada ? "CONCLUÍDA" : "EM ANDAMENTO"}
+                          </span>
+                          {viagemContexto.cliente?.nome && (
+                            <span className="text-base font-bold text-white truncate">{viagemContexto.cliente.nome}</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-white/50 mt-0.5 truncate">
+                          {[viagemContexto.origem_real, viagemContexto.destino_real].filter(Boolean).join(" → ") || viagemLabel}
+                        </p>
+                      </div>
                     </div>
+                    <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-400/30 px-2.5 py-1 text-[11px] text-emerald-300">
+                        <span className="opacity-70">Receita</span>
+                        <span className="font-bold">{formatCurrency(receitaTotal)}</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/15 border border-red-400/30 px-2.5 py-1 text-[11px] text-red-300">
+                        <span className="opacity-70">Custo</span>
+                        <span className="font-bold">-{formatCurrency(custosTotal)}</span>
+                      </span>
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] border ${lucro >= 0 ? "bg-emerald-500/15 border-emerald-400/30 text-emerald-300" : "bg-red-500/15 border-red-400/30 text-red-300"}`}>
+                        <span className="opacity-70">Margem</span>
+                        <span className="font-bold">{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 gap-4 bg-muted/10">
+                  <div>
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Veículo</p>
+                    <p className="text-sm font-semibold text-foreground mt-0.5 font-mono">{veiculoAtual?.placa_cavalo || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Motorista</p>
+                    <p className="text-sm font-semibold text-foreground mt-0.5">{motoristaAtual?.nome?.split(" ")[0] || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Partida</p>
+                    <p className="text-sm font-semibold text-foreground mt-0.5">{viagemContexto.data_inicio ? new Date(viagemContexto.data_inicio).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) : "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">{viagemFechada ? "Chegada" : "Destino"}</p>
+                    <p className="text-sm font-semibold text-foreground mt-0.5 truncate">{viagemFechada && viagemContexto.data_fim ? new Date(viagemContexto.data_fim).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) : (viagemContexto.destino_real || "—")}</p>
+                  </div>
+                </div>
+                {kmPlanejado > 0 && (
+                  <div className="px-5 pb-3">
+                    <div className="flex items-center justify-between mb-1 text-[10px] text-muted-foreground">
+                      <span className="truncate max-w-[40%]">{origemOperacionalLabel}</span>
+                      <span className="font-bold text-foreground tabular-nums">{progressoRotaPercent.toFixed(0)}%</span>
+                      <span className="truncate max-w-[40%] text-right">{destinoOperacionalLabel}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className={`h-full rounded-full transition-all duration-500 ${progressoRotaPercent >= 80 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${progressoRotaPercent}%` }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Alertas — só se houver */}
+              {pendenciasCockpit.length > 0 && (
+                <div className="space-y-1.5">
+                  {pendenciasCockpit.map((item) => {
+                    const isCritical = item.toLowerCase().includes("insuficiente") || item.toLowerCase().includes("atraso")
+                    const isWarning = item.toLowerCase().includes("elevado") || item.toLowerCase().includes("pendente")
+                    return (
+                      <div key={item} className={`flex items-start gap-2 rounded-lg border-l-2 px-3 py-2 text-xs ${
+                        isCritical ? "border-red-400 bg-red-50 text-red-800" : isWarning ? "border-amber-400 bg-amber-50 text-amber-800" : "border-border bg-muted/30 text-muted-foreground"
+                      }`}>
+                        <TriangleAlert className={`size-3.5 mt-0.5 shrink-0 ${isCritical ? "text-red-500" : isWarning ? "text-amber-500" : "text-muted-foreground/50"}`} />
+                        {item}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Events table */}
+              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                <div className="px-4 py-3 border-b border-border/60 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-foreground">Eventos</h3>
+                    <span className="text-[10px] font-mono text-muted-foreground bg-muted/50 border border-border/60 rounded px-1.5 py-0.5">{viagemLabel}</span>
+                    {eventosRealizados.length > 0 && (
+                      <span className="text-[10px] font-semibold bg-primary/10 text-primary rounded-full px-2 py-0.5">{eventosRealizados.length} registados</span>
+                    )}
+                    {viagemFechada && (
+                      <Badge className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-200">
+                        Concluída · {viagemState.data_fim ? new Date(viagemState.data_fim).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                      </Badge>
+                    )}
                   </div>
                 </div>
                 <div className="pt-0 px-4">
@@ -3977,571 +4051,159 @@ export function ViagemDetalheClient({
                         </tr>
                       </thead>
                       <tbody>
-                        {eventosCicloTabela.length === 0 && (
+                        {eventosCicloTabela.length === 0 ? (
                           <tr>
-                            <td className="py-3 text-muted-foreground" colSpan={7}>
-                              Nenhum evento registrado neste ciclo.
+                            <td colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                              Nenhum evento registrado. Use o botão <strong>Registrar evento</strong> para começar.
                             </td>
                           </tr>
-                        )}
-                        {eventosVisiveisAgrupados.map((grupo) => (
-                          <Fragment key={`grupo-${grupo.viagemId}`}>
-                            {/* Header de Viagem — redesenhado */}
+                        ) : (
+                          eventosCicloTabela.map((evento) => (
                             <tr
-                              key={`header-${grupo.viagemId}`}
-                              className="border-b border-border/60 cursor-pointer group"
-                              style={{ background: grupo.temFechamento ? "oklch(0.97 0.005 15)" : "oklch(0.97 0.005 265)" }}
+                              key={evento.id}
+                              className={`border-b border-border/50 transition-colors cursor-pointer
+                                ${evento.source?.status_evento === "em_andamento" || evento.id === ultimoMarco?.id
+                                  ? "bg-blue-50/60 hover:bg-blue-100/60"
+                                  : evento.modo === "realizado"
+                                    ? "hover:bg-muted/40"
+                                    : "bg-amber-50/40 hover:bg-amber-100/50"
+                                }`}
                               onClick={() => {
-                                const primeiroEventoEditavel = grupo.eventosViagem.find((item) => item.kind !== "resumo_fechamento" && item.source)?.source || null
-                                if (primeiroEventoEditavel) { abrirEventoNaModalAcoesRapidas(primeiroEventoEditavel); return }
-                                const newExpanded = new Set(expandedViagensIds)
-                                if (newExpanded.has(grupo.viagemId)) { newExpanded.delete(grupo.viagemId) } else { newExpanded.add(grupo.viagemId) }
-                                setExpandedViagensIds(newExpanded)
+                                if (!evento.source) return
+                                abrirEventoNaModalAcoesRapidas(evento.source)
                               }}
                             >
-                              <td colSpan={7} className="py-0">
-                                <div className={`flex flex-col px-3 py-2 border-l-4 transition-colors group-hover:bg-primary/5 ${grupo.temFechamento ? "border-l-slate-400" : "border-l-primary"}`}>
-                                  {/* Linha 1: Status + Título + Rota + Expandir */}
-                                  <div className="flex items-center gap-2">
-                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide shrink-0 ${grupo.temFechamento ? "bg-slate-100 text-slate-600" : "bg-primary/10 text-primary"}`}>
-                                      {grupo.temFechamento ? "FECHADA" : "ABERTA"}
-                                    </span>
-                                    <span className="font-bold text-sm text-foreground shrink-0">Viagem {grupo.sequencia}</span>
-                                    <span className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground flex-1 min-w-0 truncate">
-                                      <Route className="size-3 shrink-0 text-muted-foreground/60" />
-                                      <span className="truncate">{grupo.origem} → {grupo.destino}</span>
-                                    </span>
-                                    <div className="flex items-center gap-1.5 ml-auto shrink-0">
-                                      {/* Menu de ações da viagem */}
-                                      <DropdownMenu>
-                                        <DropdownMenuTrigger asChild>
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="h-7 px-2 gap-1 text-xs text-muted-foreground border-border/60 hover:border-border hover:text-foreground"
-                                            onClick={(e) => e.stopPropagation()}
-                                          >
-                                            <MoreHorizontal className="size-3.5" />
-                                            <span className="hidden sm:inline">Viagem</span>
-                                          </Button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
-                                          <DropdownMenuItem
-                                            className="gap-2 cursor-pointer"
-                                            onClick={() => {
-                                              const v = grupo.viagem
-                                              setEditingViagemId(grupo.viagemId)
-                                              setNovaViagemForm({
-                                                ciclo_id: v?.ciclo_id || cicloIdReferencia,
-                                                cliente_id: v?.cliente_id || "",
-                                                veiculo_id: v?.veiculo_id || "",
-                                                motorista_id: v?.motorista_id || "",
-                                                rota_id: v?.rota_id || "",
-                                                origem_real: v?.origem_real || "",
-                                                destino_real: v?.destino_real || "",
-                                                data_inicio: toDatetimeLocal(v?.data_inicio || ""),
-                                                data_fim: toDatetimeLocal(v?.data_fim || ""),
-                                                tipo_carga: v?.tipo_carga || "",
-                                                volume_toneladas: v?.volume_toneladas?.toString() || "",
-                                                valor_frete: v?.valor_frete?.toString() || "",
-                                                forma_pagamento: (v as any)?.forma_pagamento || "Pix",
-                                                status: (v?.status as Viagem["status"]) || "Planejada",
-                                              })
-                                              setNovaViagemModalOpen(true)
-                                            }}
-                                          >
-                                            <Pencil className="size-3.5" />
-                                            Editar viagem
-                                          </DropdownMenuItem>
-                                          <DropdownMenuSeparator />
-                                          <DropdownMenuItem
-                                            className="gap-2 cursor-pointer text-destructive focus:text-destructive"
-                                            onClick={() => {
-                                              setDeleteViagemId(grupo.viagemId)
-                                              setDeleteViagemDialogOpen(true)
-                                            }}
-                                          >
-                                            <Trash2 className="size-3.5" />
-                                            Excluir viagem
-                                          </DropdownMenuItem>
-                                        </DropdownMenuContent>
-                                      </DropdownMenu>
-
-                                      {/* Expandir/Colapsar */}
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          const newExpanded = new Set(expandedViagensIds)
-                                          if (newExpanded.has(grupo.viagemId)) { newExpanded.delete(grupo.viagemId) } else { newExpanded.add(grupo.viagemId) }
-                                          setExpandedViagensIds(newExpanded)
-                                        }}
-                                      >
-                                        <span className="text-xs">{expandedViagensIds.has(grupo.viagemId) ? "▲" : "▼"}</span>
-                                      </Button>
-                                    </div>
-                                  </div>
-                                  {/* Linha 2: Chips informativos */}
-                                  <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
-                                    {/* Veículo */}
-                                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-mono border ${grupo.viagem?.veiculo?.placa_cavalo ? "bg-background/80 border-border/50 text-foreground" : "bg-muted/30 border-border/40 text-muted-foreground"}`}>
-                                      {grupo.viagem?.veiculo?.placa_cavalo || "Sem veículo"}
-                                    </span>
-                                    {/* Motorista */}
-                                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] border ${grupo.viagem?.motorista?.nome ? "bg-background/80 border-border/50 text-foreground" : "bg-muted/30 border-border/40 text-muted-foreground"}`}>
-                                      {grupo.viagem?.motorista?.nome?.split(" ")[0] || "Sem motorista"}
-                                    </span>
-                                    {/* Frete */}
-                                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] border ${grupo.viagem?.valor_frete ? "bg-emerald-50 border-emerald-200/60 text-emerald-700" : "bg-muted/30 border-border/40 text-muted-foreground"}`}>
-                                      Frete: {grupo.viagem?.valor_frete ? formatCurrency(grupo.viagem.valor_frete) : "A definir"}
-                                    </span>
-                                    <span className="text-border/60 text-xs">·</span>
-                                    {/* Abastecimento */}
-                                    <span className="inline-flex items-center rounded px-2 py-0.5 text-[11px] border bg-amber-50 border-amber-200/60 text-amber-700">
-                                      Abast: {formatCurrency(custosAbastecimentoPorViagemId.get(grupo.viagemId) || 0)}
-                                    </span>
-                                    {/* Manutenção */}
-                                    <span className="inline-flex items-center rounded px-2 py-0.5 text-[11px] border bg-red-50/70 border-red-200/60 text-red-700">
-                                      Manut: {formatCurrency(custosManutencaoPorViagemId.get(grupo.viagemId) || 0)}
-                                    </span>
-                                    {/* Custo total */}
-                                    {(() => {
-                                      const total = (custosAbastecimentoPorViagemId.get(grupo.viagemId) || 0) + (custosManutencaoPorViagemId.get(grupo.viagemId) || 0)
-                                      return (
-                                        <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-semibold border ${total > 0 ? "bg-red-50 border-red-200/60 text-red-700" : "bg-muted/40 border-border/50 text-muted-foreground"}`}>
-                                          Custo: {formatCurrency(total)}
-                                        </span>
-                                      )
-                                    })()}
-                                    <span className="text-[11px] text-muted-foreground ml-1">{grupo.eventosReais} ev.</span>
-                                  </div>
-                                </div>
+                              <td className="px-3 py-2.5 text-[11px] text-muted-foreground tabular-nums w-8">{evento.ordem}</td>
+                              <td className="px-3 py-2.5">
+                                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${
+                                  evento.tipo === "Saída"         ? "bg-blue-100 text-blue-800" :
+                                  evento.tipo === "Chegada"       ? "bg-emerald-100 text-emerald-800" :
+                                  evento.tipo === "Abastecimento" ? "bg-amber-100 text-amber-800" :
+                                  evento.tipo === "Parada"        ? "bg-orange-100 text-orange-800" :
+                                  evento.tipo === "Manutenção"    ? "bg-red-100 text-red-800" :
+                                  evento.tipo === "Pedágio"       ? "bg-purple-100 text-purple-800" :
+                                  evento.tipo === "Ocorrência"    ? "bg-rose-100 text-rose-800" :
+                                  "bg-muted/60 text-muted-foreground"
+                                }`}>{evento.tipo}</span>
+                              </td>
+                              <td className="px-3 py-2.5 text-xs text-muted-foreground max-w-[200px] truncate">{evento.local || "—"}</td>
+                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{evento.inicio}</td>
+                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{evento.fim || "—"}</td>
+                              <td className="px-3 py-2.5 text-xs text-muted-foreground">{evento.duracao || "—"}</td>
+                              <td className="px-3 py-2.5 text-[11px]">
+                                <span className={`inline-flex items-center gap-1 ${
+                                  evento.status.includes("✅") ? "text-emerald-700" :
+                                  evento.status.includes("🟡") ? "text-amber-700" :
+                                  evento.status.includes("🔴") ? "text-red-700" :
+                                  "text-muted-foreground"
+                                }`}>{evento.status}</span>
                               </td>
                             </tr>
-                            
-                            {/* Eventos da Viagem */}
-                            {grupo.eventosViagem.length > 0 ? (
-                              grupo.eventosViagem.map((evento) => (
-                                <tr
-                                  key={evento.id}
-                                  className={`border-b border-border/50 ${
-                                    evento.kind === "resumo_fechamento"
-                                      ? "bg-emerald-50 hover:bg-emerald-100/80"
-                                      : evento.modo === "realizado"
-                                        ? "bg-slate-100/80 hover:bg-slate-200/85"
-                                        : "bg-amber-50/55 hover:bg-amber-100/65"
-                                  } ${evento.source?.status_evento === "em_andamento" || evento.id === ultimoMarco?.id ? "ring-1 ring-blue-300 bg-blue-50/45" : ""} cursor-pointer`}
-                                  onClick={() => {
-                                    if (evento.kind === "resumo_fechamento") {
-                                      setEventosCicloExpandido(true)
-                                      return
-                                    }
-
-                                    if (!evento.source) return
-                                    abrirEventoNaModalAcoesRapidas(evento.source)
-                                  }}
-                                >
-                                  <td className="px-3 py-2.5 text-[11px] text-muted-foreground tabular-nums w-8">{evento.ordem}</td>
-                                  <td className="px-3 py-2.5">
-                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${
-                                      evento.tipo === "Saída" ? "bg-blue-100 text-blue-800" :
-                                      evento.tipo === "Chegada" ? "bg-emerald-100 text-emerald-800" :
-                                      evento.tipo === "Abastecimento" ? "bg-amber-100 text-amber-800" :
-                                      evento.tipo === "Parada" ? "bg-orange-100 text-orange-800" :
-                                      evento.tipo === "Manutenção" ? "bg-red-100 text-red-800" :
-                                      evento.tipo === "Pedágio" ? "bg-purple-100 text-purple-800" :
-                                      evento.tipo === "Ocorrência" ? "bg-rose-100 text-rose-800" :
-                                      "bg-muted/60 text-muted-foreground"
-                                    }`}>{evento.tipo}</span>
-                                  </td>
-                                  <td className="px-3 py-2.5 text-xs text-muted-foreground max-w-[160px] truncate">{evento.local}</td>
-                                  <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{evento.inicio}</td>
-                                  <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{evento.fim}</td>
-                                  <td className="px-3 py-2.5 text-xs text-muted-foreground">{evento.duracao}</td>
-                                  <td className="px-3 py-2.5 text-[11px]">
-                                    <span className={`inline-flex items-center gap-1 ${
-                                      evento.status.includes("✅") ? "text-emerald-700" :
-                                      evento.status.includes("🟡") ? "text-amber-700" :
-                                      evento.status.includes("🔴") ? "text-red-700" :
-                                      "text-muted-foreground"
-                                    }`}>{evento.status}</span>
-                                  </td>
-                                </tr>
-                              ))
-                            ) : null}
-                          </Fragment>
-                        ))}
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>
                 </div>
               </div>
-
-              <div className="order-1 grid grid-cols-1 gap-2">
-                <div className="space-y-3">
-                  <div className="sticky top-2 z-10 bg-card border border-border/60 rounded-xl shadow-sm overflow-hidden">
-                    {/* Header */}
-                    <div className="bg-gradient-to-r from-primary/10 via-primary/5 to-transparent px-4 py-2.5 border-b border-border/50">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h2 className="text-xs font-bold tracking-widest uppercase text-primary">Resumo da Viagem</h2>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 text-[11px] text-emerald-700">
-                            <span className="font-normal opacity-60">Receita</span>
-                            <span className="font-bold">{formatCurrency(receitaTotal)}</span>
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 border border-red-200/70 px-2.5 py-0.5 text-[11px] text-red-700">
-                            <span className="font-normal opacity-60">Custo</span>
-                            <span className="font-bold">-{formatCurrency(custosTotal)}</span>
-                          </span>
-                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] ${lucro >= 0 ? "bg-emerald-50 border-emerald-200/70 text-emerald-700" : "bg-red-50 border-red-200/70 text-red-700"}`}>
-                            <span className="font-normal opacity-60">Margem</span>
-                            <span className="font-bold">{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</span>
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Body */}
-                    <div className="px-4 py-3 space-y-3">
-                      {/* Progresso da rota */}
-                      {kmPlanejado > 0 && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1 text-xs text-muted-foreground">
-                            <span className="truncate max-w-[40%]">{origemOperacionalLabel}</span>
-                            <span className="font-bold text-foreground tabular-nums">{progressoRotaPercent.toFixed(0)}%</span>
-                            <span className="truncate max-w-[40%] text-right">{destinoOperacionalLabel}</span>
-                          </div>
-                          <div className="h-2 rounded-full bg-muted overflow-hidden">
-                            <div className={`h-full rounded-full transition-all duration-500 ${progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-primary" : "bg-muted-foreground/40"}`} style={{ width: `${progressoRotaPercent}%` }} />
-                          </div>
-                          <p className="text-[10px] text-muted-foreground mt-1">
-                            {kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km` : "0 km"} percorridos
-                            {kmRestanteAutomatico > 0 ? ` · ${kmRestanteAutomatico.toLocaleString("pt-BR")} km restantes` : ""}
-                          </p>
-                        </div>
-                      )}
-                      {/* Info operacional */}
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                        <p className="text-muted-foreground">Veículo: <span className="font-semibold text-foreground">{veiculoAtual?.placa_cavalo || "—"}</span></p>
-                        <p className="text-muted-foreground">Motorista: <span className="font-semibold text-foreground">{motoristaAtual?.nome?.split(" ")[0] || "—"}</span></p>
-                        <p className="text-muted-foreground">Docs: <span className="font-semibold text-foreground">{documentos.length}</span></p>
-                        <p className="text-muted-foreground">Eventos: <span className="font-semibold text-foreground">{eventosRealizados.length}</span></p>
-                      </div>
-                      {/* Último evento */}
-                      {ultimoMarco && (
-                        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
-                          <p className="text-xs text-muted-foreground">
-                            <span className="font-semibold text-foreground">Último evento:</span>{" "}
-                            {eventTypeLabels[ultimoMarco.tipo_evento]} · {ultimoMarco.local || "—"} · {formatDateTime(ultimoMarco.ocorrido_em)}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* ALERTAS com severidade */}
-                  <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
-                    <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between">
-                      <p className="text-xs font-bold tracking-widest uppercase text-muted-foreground">Alertas / Pendências</p>
-                      {pendenciasCockpit.length > 0 && (
-                        <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 rounded-full px-2 py-0.5">{pendenciasCockpit.length}</span>
-                      )}
-                    </div>
-                    <div className="px-3 py-2 space-y-1">
-                      {pendenciasCockpit.length === 0 && (
-                        <p className="text-xs text-muted-foreground py-2 text-center">Sem pendências</p>
-                      )}
-                      {pendenciasCockpit.map((item) => {
-                        const isCritical = item.toLowerCase().includes("insuficiente") || item.toLowerCase().includes("atraso estimado")
-                        const isWarning = item.toLowerCase().includes("elevado") || item.toLowerCase().includes("pendente")
-                        return (
-                          <div key={item} className={`flex items-start gap-2 rounded-md border-l-2 px-3 py-1.5 text-xs ${
-                            isCritical ? "border-red-400 bg-red-50 text-red-800" : isWarning ? "border-amber-400 bg-amber-50 text-amber-800" : "border-muted-foreground/30 bg-muted/30 text-muted-foreground"
-                          }`}>
-                            <TriangleAlert className={`size-3.5 mt-0.5 shrink-0 ${isCritical ? "text-red-500" : isWarning ? "text-amber-500" : "text-muted-foreground/50"}`} />
-                            <span className="leading-snug">{item}</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {/* KPIs movidos para a coluna da direita */}
-                <div className="hidden">
-                  {/* Linha 1 · Críticos */}
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-0.5">Críticos</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* Health Score */}
-                    <Card className={`border shadow-sm py-2 gap-0 ring-1 ${healthScoreLabel.ring}`}>
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Health score</p>
-                        <p className={`text-2xl font-bold ${healthScoreLabel.color}`}>{healthScore}</p>
-                        <p className={`text-[11px] font-semibold ${healthScoreLabel.color}`}>{healthScoreLabel.label}</p>
-                      </CardContent>
-                    </Card>
-                    {/* Atraso */}
-                    <Card className={`border shadow-sm py-2 gap-0 ${atrasoAcumuladoCicloMin > 0 ? "ring-1 ring-red-300 border-red-200" : "border-border/60"}`}>
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Atraso acumulado</p>
-                        <p className={`text-2xl font-bold ${atrasoAcumuladoCicloMin > 0 ? "text-red-700" : "text-emerald-700"}`}>
-                          {atrasoAcumuladoCicloMin > 0 ? `+${formatDurationByUnit(atrasoAcumuladoCicloMin)}` : "No prazo"}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {atrasoAcumuladoCicloMin > 0 ? "Acima do planejado" : "Dentro do SLA"}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    {/* Autonomia */}
-                    <Card className={`border shadow-sm py-2 gap-0 col-span-2 ${autonomiaRestanteKm !== null && autonomiaRestanteKm < 200 ? "ring-1 ring-amber-300 border-amber-200" : "border-border/60"}`}>
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Autonomia restante estimada</p>
-                        <p className={`text-2xl font-bold ${autonomiaRestanteKm === null ? "text-muted-foreground" : autonomiaRestanteKm < 200 ? "text-amber-700" : "text-foreground"}`}>
-                          {autonomiaRestanteKm !== null ? `${autonomiaRestanteKm.toLocaleString("pt-BR")} km` : "-"}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {saldoAtualEstimadoLitros !== null ? `Saldo: ${saldoAtualEstimadoLitros.toFixed(0)} L` : "Configure saldo inicial"}
-                          {kmRestanteAutomatico > 0 ? ` · ${kmRestanteAutomatico.toLocaleString("pt-BR")} km restantes na rota` : ""}
-                        </p>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  {/* Linha 2 · Performance */}
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-0.5 pt-1">Performance</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* Progresso da rota */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0 col-span-2">
-                      <CardContent className="p-3">
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Progresso da rota</p>
-                          <span className="text-[11px] font-semibold text-foreground">{progressoRotaPercent.toFixed(0)}%</span>
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${
-                              progressoRotaPercent >= 80 ? "bg-emerald-500" : progressoRotaPercent >= 40 ? "bg-blue-500" : "bg-slate-400"
-                            }`}
-                            style={{ width: `${progressoRotaPercent}%` }}
-                          />
-                        </div>
-                        <p className="text-[11px] text-muted-foreground mt-1">
-                          {kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km percorridos` : "Sem dados de km"}
-                          {kmPlanejado > 0 ? ` / ${kmPlanejado.toLocaleString("pt-BR")} km planejados` : ""}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    {/* Eficiência de movimento */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0">
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Em movimento</p>
-                        <p className="text-2xl font-bold text-foreground">
-                          {eficienciaMovimentoPercent !== null ? `${eficienciaMovimentoPercent}%` : "-"}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">Parado: {formatDurationByUnit(tempoTotalParadoMin)}</p>
-                      </CardContent>
-                    </Card>
-                    {/* Eventos cumpridos */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0">
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Eventos</p>
-                        <p className="text-2xl font-bold text-foreground">
-                          {eventosRealizados.length} <span className="text-base font-normal text-muted-foreground">/ {eventosRealizados.length + eventosPlanejados.length}</span>
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {eventosConformidadePercent !== null ? `${eventosConformidadePercent}% realizados` : "Sem eventos"}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    {/* Km/l */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0">
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Km/L real</p>
-                        <p className="text-2xl font-bold text-foreground">
-                          {kmPorLitroCiclo !== null ? kmPorLitroCiclo.toFixed(2) : "-"}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          Meta: {consumoMedioEditavel > 0 ? consumoMedioEditavel.toFixed(2) : "-"}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    {/* Carregamento */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0">
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Carregamento</p>
-                        <p className="text-base font-bold text-foreground leading-tight">
-                          {formatDurationByUnit(tempoCarregamentoRealMin)}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">Plan.: {formatDurationByUnit(tempoCarregamentoPlanejadoMin)}</p>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  {/* Linha 3 · Financeiro */}
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-0.5 pt-1">Financeiro</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* Receita */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0">
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Receita</p>
-                        <p className="text-lg font-bold text-emerald-700">{formatCurrency(receitaTotal)}</p>
-                        <p className="text-[11px] text-muted-foreground">Frete: {formatCurrency(receitaFrete)}</p>
-                      </CardContent>
-                    </Card>
-                    {/* Custo */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0">
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Custo acum.</p>
-                        <p className="text-lg font-bold text-red-700">{formatCurrency(custosTotal)}</p>
-                        <p className="text-[11px] text-muted-foreground">{custoAbastecimentoLabel}: {formatCurrency(abastecimentosResumo.custo)}</p>
-                      </CardContent>
-                    </Card>
-                    {/* Margem */}
-                    <Card className={`border shadow-sm py-2 gap-0 ${lucro < 0 ? "ring-1 ring-red-300 border-red-200" : "border-border/60"}`}>
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Margem est.</p>
-                        <p className={`text-lg font-bold ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>
-                          {lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">{formatCurrency(lucro)}</p>
-                      </CardContent>
-                    </Card>
-                    {/* Custo/km */}
-                    <Card className="border-border/60 shadow-sm py-2 gap-0">
-                      <CardContent className="p-3">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide">R$/km</p>
-                        <p className="text-lg font-bold text-foreground">
-                          {custoPorKm > 0 ? formatCurrency(custoPorKm) : "-"}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">{kmTotalCiclo > 0 ? `${kmTotalCiclo.toLocaleString("pt-BR")} km` : "Sem km"}</p>
-                      </CardContent>
-                    </Card>
-                  </div>
-                </div>
-              </div>
-
-
             </div>
 
+            {/* ── RIGHT sidebar ── */}
             <div className="space-y-3 xl:sticky xl:top-2 xl:self-start">
+
+              {/* Registrar evento — topo, sempre visível */}
+              <Button
+                type="button"
+                className="w-full h-11 gradient-primary font-bold text-sm shadow-md"
+                onClick={() => {
+                  setEventoViagemAlvoId(viagemState.id)
+                  setRegistroViagemSelecionadaId(viagemState.id)
+                  setQuickActionsModalOpen(true)
+                  setQuickActionStep('list')
+                  setSelectedQuickAction(null)
+                  setTipoParadaSelecionado('carga')
+                  setDocumentacaoQuickActionFile(null)
+                  setDocumentacaoQuickActionPreview('')
+                }}
+                disabled={loading}
+              >
+                {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Plus className="size-4 mr-1.5" />}
+                Registrar evento
+              </Button>
+
               {/* Financeiro */}
               <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
-                <div className="px-3 py-2 border-b border-border/50">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Financeiro</p>
+                <div className="px-4 py-3 border-b border-border/50">
+                  <p className="text-xs font-semibold text-foreground">Financeiro</p>
                 </div>
-                <div className="p-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-lg border-l-2 border-emerald-400 bg-emerald-50/60 px-2.5 py-2">
-                    <p className="text-[10px] text-muted-foreground">Receita</p>
-                    <p className="text-sm font-bold text-emerald-700 leading-tight">{formatCurrency(receitaTotal)}</p>
+                <div className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Receita</span>
+                    <span className="text-sm font-bold text-emerald-700">{formatCurrency(receitaTotal)}</span>
                   </div>
-                  <div className="rounded-lg border-l-2 border-red-400 bg-red-50/60 px-2.5 py-2">
-                    <p className="text-[10px] text-muted-foreground">Custo</p>
-                    <p className="text-sm font-bold text-red-700 leading-tight">{formatCurrency(custosTotal)}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Custo</span>
+                    <span className="text-sm font-bold text-red-700">-{formatCurrency(custosTotal)}</span>
                   </div>
-                  <div className={`rounded-lg border-l-2 px-2.5 py-2 ${lucro >= 0 ? "border-emerald-400 bg-emerald-50/60" : "border-red-400 bg-red-50/60"}`}>
-                    <p className="text-[10px] text-muted-foreground">Margem</p>
-                    <p className={`text-sm font-bold leading-tight ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</p>
+                  <div className="h-px bg-border/60" />
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-foreground">Margem</span>
+                    <span className={`text-sm font-bold ${lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>{lucro >= 0 ? "+" : ""}{margem.toFixed(1)}%</span>
                   </div>
-                  <div className="rounded-lg border-l-2 border-border bg-muted/30 px-2.5 py-2">
-                    <p className="text-[10px] text-muted-foreground">R$/km</p>
-                    <p className="text-sm font-bold leading-tight">{custoPorKm > 0 ? formatCurrency(custoPorKm) : "—"}</p>
-                  </div>
+                  {custoPorKm > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">R$/km</span>
+                      <span className="text-xs font-semibold text-foreground">{formatCurrency(custoPorKm)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Abastecimento */}
-              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
-                <div className="px-3 py-2 border-b border-border/50">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Abastecimento</p>
+              {abastecimentosResumo.litros > 0 && (
+                <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 border-b border-border/50">
+                    <p className="text-xs font-semibold text-foreground">Abastecimento</p>
+                  </div>
+                  <div className="p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Litros</span>
+                      <span className="text-sm font-bold">{abastecimentosResumo.litros.toFixed(0)} L</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Valor</span>
+                      <span className="text-sm font-bold text-red-700">{formatCurrency(abastecimentosResumo.custo)}</span>
+                    </div>
+                    {kmPorLitroCiclo !== null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Consumo</span>
+                        <span className="text-sm font-bold">{kmPorLitroCiclo.toFixed(2)} km/L</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="p-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-lg border border-border/60 px-2.5 py-2">
-                    <p className="text-[10px] text-muted-foreground">km/L</p>
-                    <p className="text-sm font-bold leading-tight">{kmPorLitroCiclo !== null ? `${kmPorLitroCiclo.toFixed(2)}` : "—"}</p>
-                  </div>
-                  <div className="rounded-lg border border-border/60 px-2.5 py-2">
-                    <p className="text-[10px] text-muted-foreground">Litros</p>
-                    <p className="text-sm font-bold leading-tight">{abastecimentosResumo.litros > 0 ? `${abastecimentosResumo.litros.toFixed(0)} L` : "—"}</p>
-                  </div>
-                  <div className="col-span-2 rounded-lg border-l-2 border-red-400 bg-red-50/60 px-2.5 py-2">
-                    <p className="text-[10px] text-muted-foreground">Valor abastecido</p>
-                    <p className="text-sm font-bold text-red-700 leading-tight">{abastecimentosResumo.custo > 0 ? formatCurrency(abastecimentosResumo.custo) : "—"}</p>
-                  </div>
-                </div>
-              </div>
+              )}
 
-              {/* Performance */}
-              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
-                <div className="px-3 py-2 border-b border-border/50">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Performance</p>
-                </div>
-                <div className="p-3 space-y-3">
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-[10px] text-muted-foreground">Progresso da rota</p>
-                      <span className="text-xs font-bold text-foreground tabular-nums">{progressoRotaPercent.toFixed(0)}%</span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div className={`h-full rounded-full transition-all ${progressoRotaPercent >= 80 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${progressoRotaPercent}%` }} />
-                    </div>
-                    <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span>{kmPercorrido > 0 ? `${kmPercorrido.toLocaleString("pt-BR")} km` : "0 km"}</span>
-                      <span>{kmRestanteAutomatico > 0 ? `${kmRestanteAutomatico.toLocaleString("pt-BR")} km rest.` : ""}</span>
-                    </div>
+              {/* Último evento */}
+              {ultimoMarco && (
+                <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 border-b border-border/50">
+                    <p className="text-xs font-semibold text-foreground">Último evento</p>
+                  </div>
+                  <div className="p-4 space-y-1.5">
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      ultimoMarco.tipo_evento === "saida" ? "bg-blue-100 text-blue-800" :
+                      ultimoMarco.tipo_evento === "chegada" ? "bg-emerald-100 text-emerald-800" :
+                      ultimoMarco.tipo_evento === "abastecimento" ? "bg-amber-100 text-amber-800" :
+                      "bg-muted text-muted-foreground"
+                    }`}>{eventTypeLabels[ultimoMarco.tipo_evento]}</span>
+                    <p className="text-xs font-semibold text-foreground">{ultimoMarco.local || "—"}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatDateTime(ultimoMarco.ocorrido_em)}</p>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Ações rápidas */}
-              <div className="bg-card rounded-xl border border-border/60 shadow-sm overflow-hidden">
-                <div className="px-3 py-2.5 border-b border-border/50">
-                  <p className="text-xs font-semibold text-foreground">Ações rápidas</p>
-                </div>
-                <div className="p-3 space-y-2">
-                  <div className="grid gap-1">
-                    <Label>Viagem dos registros</Label>
-                    <Select
-                      value={opcoesViagemAbertasRegistros.length > 0 ? registroViagemSelecionadaId : undefined}
-                      onValueChange={(value) => {
-                        setRegistroViagemSelecionadaId(value)
-                        setEventoViagemAlvoId(value)
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecione a viagem (ID)" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {opcoesViagemAbertasRegistros.map((item) => (
-                          <SelectItem key={item.id} value={item.id}>
-                            Viagem {item.sequencia}
-                          </SelectItem>
-                        ))}
-                        {opcoesViagemAbertasRegistros.length === 0 ? (
-                          <SelectItem value="__sem_viagem_aberta__" disabled>
-                            Nenhuma viagem aberta
-                          </SelectItem>
-                        ) : null}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Button
-                    type="button"
-                    className="w-full gradient-primary font-semibold text-sm shadow-sm"
-                    onClick={() => {
-                      setQuickActionsModalOpen(true)
-                      setQuickActionStep('list')
-                      setSelectedQuickAction(null)
-                      setTipoParadaSelecionado('carga')
-                      setDocumentacaoQuickActionFile(null)
-                      setDocumentacaoQuickActionPreview('')
-                    }}
-                    disabled={loading || !temViagemAbertaParaRegistro}
-                  >
-                    {loading ? <Loader2 className="size-4 mr-2 animate-spin" /> : null}
-                    Registrar evento
-                  </Button>
+              {/* Modal de ações rápidas */}
 
                   {/* Modal de ações rápidas em estilo wizard/tab horizontal */}
                   <Dialog open={quickActionsModalOpen} onOpenChange={(open) => {
@@ -4571,9 +4233,9 @@ export function ViagemDetalheClient({
                               </p>
                             </div>
                             <div className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-right backdrop-blur">
-                              <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">Viagem ativa</p>
+                              <p className="text-[10px] font-bold uppercase tracking-widest text-white/50">Viagem</p>
                               <p className="text-sm font-bold text-white">
-                                {viagemAtivaNoModalSequencia ? `Viagem ${viagemAtivaNoModalSequencia}` : "—"}
+                                {viagemState.cliente?.nome?.split(" ")[0] || viagemLabel || "—"}
                               </p>
                             </div>
                           </div>
@@ -4585,17 +4247,13 @@ export function ViagemDetalheClient({
                             const isActive = selectedQuickAction?.title === action.title
                             const iconMap: Record<string, React.ReactNode> = {
                               "Partida/Chegada": <ArrowRightLeft className="size-4" />,
-                              "Parada":          <MapPin className="size-4" />,
                               "Abastecimento":   <Fuel className="size-4" />,
                               "Manutenção":      <Wrench className="size-4" />,
-                              "Documentação":    <FileText className="size-4" />,
                             }
                             const colorMap: Record<string, string> = {
                               "Partida/Chegada": "text-blue-600 border-blue-500",
-                              "Parada":          "text-orange-600 border-orange-500",
                               "Abastecimento":   "text-amber-600 border-amber-500",
                               "Manutenção":      "text-red-600 border-red-500",
-                              "Documentação":    "text-violet-600 border-violet-500",
                             }
                             return (
                               <button
@@ -4637,14 +4295,6 @@ export function ViagemDetalheClient({
                                     <div>
                                       <Label className="text-xs font-semibold text-muted-foreground">Fim</Label>
                                       <Input type="datetime-local" className="mt-1.5 text-sm" value={abastecimentoForm.fim_em} onChange={e => setAbastecimentoForm(f => ({ ...f, fim_em: e.target.value }))} />
-                                    </div>
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Chegada cliente</Label>
-                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={abastecimentoForm.chegada_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
-                                    </div>
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Partida cliente</Label>
-                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={abastecimentoForm.partida_cliente_em} onChange={e => setAbastecimentoForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
                                     </div>
                                     <div className="col-span-2">
                                       <Label className="text-xs font-semibold text-muted-foreground">Local / Posto <span className="text-amber-600">*</span></Label>
@@ -4952,114 +4602,6 @@ export function ViagemDetalheClient({
                                 </div>
                               )
                             })()}
-                            {selectedQuickAction && selectedQuickAction.type === 'parada' && (
-                              <div className="space-y-3">
-                                {/* Dados principais */}
-                                <div className="rounded-xl border border-orange-200/70 overflow-hidden">
-                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-orange-50/60 border-b border-orange-200/60">
-                                    <div className="size-1.5 rounded-full bg-orange-500" />
-                                    <p className="text-[11px] font-bold uppercase tracking-widest text-orange-700">Parada</p>
-                                  </div>
-                                  <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Tipo <span className="text-orange-600">*</span></Label>
-                                      <Select value={tipoParadaSelecionado} onValueChange={v => setTipoParadaSelecionado(v as any)}>
-                                        <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                          <SelectItem value="carga">Carga</SelectItem>
-                                          <SelectItem value="descarga">Descarga</SelectItem>
-                                          <SelectItem value="descanso">Descanso</SelectItem>
-                                          <SelectItem value="parada_operacional">Parada Operacional</SelectItem>
-                                          <SelectItem value="ocorrencia">Ocorrência</SelectItem>
-                                        </SelectContent>
-                                      </Select>
-                                    </div>
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Início <span className="text-orange-600">*</span></Label>
-                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.inicio_em} onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))} required />
-                                    </div>
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Fim</Label>
-                                      <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.fim_em} onChange={e => setEventForm(f => ({ ...f, fim_em: e.target.value }))} />
-                                    </div>
-                                    <div className="md:col-span-2 xl:col-span-3">
-                                      <Label className="text-xs font-semibold text-muted-foreground">Local <span className="text-orange-600">*</span></Label>
-                                      <Input className="mt-1.5 text-sm" value={eventForm.local} onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))} placeholder="Cliente, pátio, posto, base..." required />
-                                    </div>
-                                    {(tipoParadaSelecionado === 'carga' || tipoParadaSelecionado === 'descarga') && (
-                                      <>
-                                        <div>
-                                          <Label className="text-xs font-semibold text-muted-foreground">Chegada no cliente</Label>
-                                          <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.chegada_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, chegada_cliente_em: e.target.value }))} />
-                                        </div>
-                                        <div>
-                                          <Label className="text-xs font-semibold text-muted-foreground">Partida do cliente</Label>
-                                          <Input type="datetime-local" className="mt-1.5 text-sm" value={eventForm.partida_cliente_em || ""} onChange={e => setEventForm(f => ({ ...f, partida_cliente_em: e.target.value }))} />
-                                        </div>
-                                      </>
-                                    )}
-                                    <div className="md:col-span-2 xl:col-span-3">
-                                      <Label className="text-xs font-semibold text-muted-foreground">Observação</Label>
-                                      <Textarea className="mt-1.5 text-sm" rows={3} value={eventForm.observacao} onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))} placeholder="Contexto da parada..." />
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* Ocorrência vinculada */}
-                                {tipoParadaSelecionado === 'ocorrencia' && (
-                                  <div className="rounded-xl border border-red-200/70 overflow-hidden">
-                                    <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50/60 border-b border-red-200/60">
-                                      <div className="size-1.5 rounded-full bg-red-500" />
-                                      <p className="text-[11px] font-bold uppercase tracking-widest text-red-700">Ocorrência</p>
-                                    </div>
-                                    <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                                      <div>
-                                        <Label className="text-xs font-semibold text-muted-foreground">Categoria</Label>
-                                        <Input className="mt-1.5 text-sm" value={ocorrenciaForm.categoria} onChange={e => setOcorrenciaForm(f => ({ ...f, categoria: e.target.value }))} placeholder="Acidente, Pane..." />
-                                      </div>
-                                      <div>
-                                        <Label className="text-xs font-semibold text-muted-foreground">Severidade</Label>
-                                        <Select value={ocorrenciaForm.severidade} onValueChange={v => setOcorrenciaForm(f => ({ ...f, severidade: v }))}>
-                                          <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
-                                          <SelectContent>
-                                            <SelectItem value="baixa">Baixa</SelectItem>
-                                            <SelectItem value="media">Média</SelectItem>
-                                            <SelectItem value="alta">Alta</SelectItem>
-                                            <SelectItem value="critica">Crítica</SelectItem>
-                                          </SelectContent>
-                                        </Select>
-                                      </div>
-                                      <div>
-                                        <Label className="text-xs font-semibold text-muted-foreground">Houve parada?</Label>
-                                        <Select value={ocorrenciaForm.houve_parada} onValueChange={v => setOcorrenciaForm(f => ({ ...f, houve_parada: v }))}>
-                                          <SelectTrigger className="mt-1.5 text-sm"><SelectValue /></SelectTrigger>
-                                          <SelectContent>
-                                            <SelectItem value="nao">Não</SelectItem>
-                                            <SelectItem value="sim">Sim</SelectItem>
-                                          </SelectContent>
-                                        </Select>
-                                      </div>
-                                      <div>
-                                        <Label className="text-xs font-semibold text-muted-foreground">Tempo parado (min)</Label>
-                                        <Input type="number" className="mt-1.5 text-sm" value={ocorrenciaForm.tempo_parado_min} onChange={e => setOcorrenciaForm(f => ({ ...f, tempo_parado_min: e.target.value }))} placeholder="45" />
-                                      </div>
-                                      <div className="md:col-span-2 xl:col-span-2">
-                                        <Label className="text-xs font-semibold text-muted-foreground">Ação imediata</Label>
-                                        <Textarea className="mt-1.5 text-sm" rows={2} value={ocorrenciaForm.acao_imediata} onChange={e => setOcorrenciaForm(f => ({ ...f, acao_imediata: e.target.value }))} placeholder="Ação tomada..." />
-                                      </div>
-                                      <div>
-                                        <Label className="text-xs font-semibold text-muted-foreground">Responsável</Label>
-                                        <Input className="mt-1.5 text-sm" value={ocorrenciaForm.responsavel_acao} onChange={e => setOcorrenciaForm(f => ({ ...f, responsavel_acao: e.target.value }))} />
-                                      </div>
-                                      <div>
-                                        <Label className="text-xs font-semibold text-muted-foreground">Contato</Label>
-                                        <Input className="mt-1.5 text-sm" value={ocorrenciaForm.contato} onChange={e => setOcorrenciaForm(f => ({ ...f, contato: e.target.value }))} placeholder="Telefone ou e-mail" />
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
                             {selectedQuickAction && selectedQuickAction.type === 'manutencao' && (
                               <div className="space-y-3">
                                 {/* Contexto */}
@@ -5185,87 +4727,6 @@ export function ViagemDetalheClient({
                                 </div>
                               </div>
                             )}
-                            {selectedQuickAction && selectedQuickAction.title === 'Documentação' && (
-                              <div className="space-y-3">
-                                {/* Dados da entrega */}
-                                <div className="rounded-xl border border-violet-200/70 overflow-hidden">
-                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
-                                    <div className="size-1.5 rounded-full bg-violet-500" />
-                                    <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Dados da entrega</p>
-                                  </div>
-                                  <div className="p-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Data/Hora <span className="text-violet-600">*</span></Label>
-                                      <Input
-                                        type="datetime-local"
-                                        className="mt-1.5 text-sm"
-                                        value={eventForm.inicio_em}
-                                        onChange={e => setEventForm(f => ({ ...f, inicio_em: e.target.value }))}
-                                        required
-                                      />
-                                    </div>
-                                    <div>
-                                      <Label className="text-xs font-semibold text-muted-foreground">Local <span className="text-violet-600">*</span></Label>
-                                      <Input
-                                        className="mt-1.5 text-sm"
-                                        value={eventForm.local}
-                                        onChange={e => setEventForm(f => ({ ...f, local: e.target.value }))}
-                                        placeholder="Ex: Cliente X - Recebimento"
-                                        required
-                                      />
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* Comprovante */}
-                                <div className="rounded-xl border border-violet-200/70 overflow-hidden">
-                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
-                                    <div className="size-1.5 rounded-full bg-violet-500" />
-                                    <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Comprovante</p>
-                                  </div>
-                                  <div className="p-4">
-                                    <Input
-                                      type="file"
-                                      accept="image/*"
-                                      className="text-sm"
-                                      onChange={(e) => {
-                                        const file = e.target.files?.[0]
-                                        if (file) {
-                                          setDocumentacaoQuickActionFile(file)
-                                          const reader = new FileReader()
-                                          reader.onload = (event) => {
-                                            setDocumentacaoQuickActionPreview(event.target?.result as string)
-                                          }
-                                          reader.readAsDataURL(file)
-                                        }
-                                      }}
-                                    />
-                                    {documentacaoQuickActionPreview && documentacaoQuickActionFile?.type.startsWith('image/') && (
-                                      <div className="mt-3 rounded-lg border border-violet-200/60 bg-violet-50/40 p-3">
-                                        <img src={documentacaoQuickActionPreview} alt="pré-visualização da documentação" className="max-h-48 w-auto rounded" />
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Observações */}
-                                <div className="rounded-xl border border-violet-200/70 overflow-hidden">
-                                  <div className="flex items-center gap-2 px-4 py-2.5 bg-violet-50/60 border-b border-violet-200/60">
-                                    <div className="size-1.5 rounded-full bg-violet-500" />
-                                    <p className="text-[11px] font-bold uppercase tracking-widest text-violet-700">Observações</p>
-                                  </div>
-                                  <div className="p-4">
-                                    <Textarea
-                                      className="text-sm"
-                                      rows={3}
-                                      value={eventForm.observacao}
-                                      onChange={e => setEventForm(f => ({ ...f, observacao: e.target.value }))}
-                                      placeholder="Recebedor, ressalvas ou contexto da entrega"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            )}
                           </div>
                         </div>
                         {/* Rodapé fixo */}
@@ -5338,8 +4799,7 @@ export function ViagemDetalheClient({
                       </div>
                     </DialogContent>
                   </Dialog>
-                </div>
-              </div>
+
             </div>
           </div>
         </TabsContent>

@@ -338,7 +338,8 @@ export function ViagensClient({ initialViagens, clientes: initialClientes, veicu
             {viagensFiltradas.map((viagem) => {
               const status = normalizeStatus(viagem.status)
               const cfg = statusConfig[status] || statusConfig["Planejada"]
-              const rota = [viagem.origem_real, viagem.destino_real].filter(Boolean).join(" → ")
+              const origem = viagem.origem_real
+              const destino = viagem.destino_real
               return (
                 <div
                   key={viagem.id}
@@ -346,62 +347,72 @@ export function ViagensClient({ initialViagens, clientes: initialClientes, veicu
                   tabIndex={0}
                   onClick={() => handleOpenCockpit(viagem.id)}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleOpenCockpit(viagem.id) } }}
-                  className="group flex items-center gap-4 px-4 py-3.5 hover:bg-primary/[0.03] transition-colors cursor-pointer"
+                  className={`group relative flex items-stretch gap-0 hover:bg-primary/[0.025] transition-colors cursor-pointer`}
                 >
-                  {/* Status icon */}
-                  <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${cfg.bg}`}>
-                    <Truck className={`h-4 w-4 ${cfg.text}`} />
-                  </div>
+                  {/* Barra colorida de status */}
+                  <div className={`w-1 shrink-0 ${cfg.dot.replace("bg-", "bg-")}`} />
 
-                  {/* Info principal */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${cfg.bg} ${cfg.text}`}>
-                        <span className={`size-1.5 rounded-full ${cfg.dot}`} />
-                        {cfg.label}
-                      </span>
-                      {viagem.cliente?.nome && (
-                        <span className="text-sm font-semibold text-foreground truncate">{viagem.cliente.nome}</span>
-                      )}
-                      {!viagem.cliente?.nome && rota && (
-                        <span className="text-sm font-semibold text-foreground truncate">{rota}</span>
-                      )}
+                  <div className="flex-1 min-w-0 px-4 py-4 grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 md:gap-6 items-center">
+                    {/* Col 1: Cliente + Rota */}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${cfg.bg} ${cfg.text}`}>
+                          <span className={`size-1.5 rounded-full ${cfg.dot}`} />
+                          {cfg.label}
+                        </span>
+                        <span className="text-sm font-bold text-foreground truncate">
+                          {viagem.cliente?.nome || "Sem cliente"}
+                        </span>
+                        {viagem.tipo_carga && (
+                          <span className="text-[10px] text-muted-foreground bg-muted/60 rounded px-1.5 py-0.5">{viagem.tipo_carga}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        {origem || destino ? (
+                          <>
+                            <MapPin className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                            <span className="font-medium text-foreground/80">{origem || "—"}</span>
+                            {destino && <><span className="text-muted-foreground/40">→</span><span className="font-medium text-foreground/80">{destino}</span></>}
+                          </>
+                        ) : (
+                          <span className="italic text-muted-foreground/50">Rota não definida</span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                      {viagem.cliente?.nome && rota && (
-                        <span className="flex items-center gap-1">
-                          <MapPin className="h-3 w-3 shrink-0" />
-                          <span className="truncate max-w-[200px]">{rota}</span>
+
+                    {/* Col 2: Motorista + Veículo */}
+                    <div className="hidden md:flex flex-col gap-1 min-w-[140px]">
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <User className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                        <span className={viagem.motorista?.nome ? "text-foreground font-medium" : "text-muted-foreground/50 italic"}>
+                          {viagem.motorista?.nome?.split(" ")[0] || "Sem motorista"}
                         </span>
-                      )}
-                      {viagem.motorista?.nome && (
-                        <span className="flex items-center gap-1">
-                          <User className="h-3 w-3 shrink-0" />{viagem.motorista.nome.split(" ")[0]}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <Truck className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                        <span className={viagem.veiculo?.placa_cavalo ? "text-foreground font-mono font-semibold" : "text-muted-foreground/50 italic"}>
+                          {viagem.veiculo?.placa_cavalo || "Sem veículo"}
                         </span>
-                      )}
-                      {viagem.veiculo?.placa_cavalo && (
-                        <span className="flex items-center gap-1">
-                          <Truck className="h-3 w-3 shrink-0" />{viagem.veiculo.placa_cavalo}
-                        </span>
+                      </div>
+                    </div>
+
+                    {/* Col 3: Data + Frete */}
+                    <div className="hidden md:flex flex-col items-end gap-1 min-w-[110px]">
+                      {viagem.valor_frete ? (
+                        <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(Number(viagem.valor_frete))}</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground/50 italic">Frete a definir</span>
                       )}
                       {viagem.data_inicio && (
-                        <span className="flex items-center gap-1">
-                          <Calendar className="h-3 w-3 shrink-0" />{formatDate(viagem.data_inicio)}
+                        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <Calendar className="h-3 w-3" />{formatDate(viagem.data_inicio)}
                         </span>
                       )}
                     </div>
                   </div>
 
-                  {/* Frete */}
-                  {viagem.valor_frete ? (
-                    <div className="text-right shrink-0 hidden sm:block">
-                      <p className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(Number(viagem.valor_frete))}</p>
-                      <p className="text-[10px] text-muted-foreground">frete</p>
-                    </div>
-                  ) : null}
-
-                  {/* Seta + menu */}
-                  <div className="flex items-center gap-1 shrink-0">
+                  {/* Menu */}
+                  <div className="flex items-center gap-1 shrink-0 pr-3">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button

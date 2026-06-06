@@ -5,7 +5,6 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
@@ -19,17 +18,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  type Cliente,
-  type Veiculo,
-  type Motorista,
-  type Rota,
-  type PontoIntermediario,
-  PONTO_PARADA_TIPO_OPTIONS,
-  normalizePontoIntermediarioKm,
-  normalizePontoParadaTipo,
-} from "@/lib/types"
-import { Users, Truck, User, Route, Plus, X, GripVertical } from "lucide-react"
+import type { Cliente, Veiculo, Motorista, Rota } from "@/lib/types"
+import { Users, Truck, User, Route } from "lucide-react"
 
 const ESTADOS = [
   "AC","AL","AP","AM","BA","CE","DF","ES","GO","MA",
@@ -329,30 +319,9 @@ export function QuickRotaModal({
     km_planejado: "",
     pedagio_planejado: "",
     tempo_ciclo_esperado_horas: "",
-    locais_abastecimento: "",
   })
-  const [pontosIntermediarios, setPontosIntermediarios] = useState<PontoIntermediario[]>([])
-
   const resetForm = () => {
-    setForm({ nome: "", origem_cidade: "", origem_estado: "", destino_cidade: "", destino_estado: "", km_planejado: "", pedagio_planejado: "", tempo_ciclo_esperado_horas: "", locais_abastecimento: "" })
-    setPontosIntermediarios([])
-  }
-
-  const addPonto = () => {
-    setPontosIntermediarios([
-      ...pontosIntermediarios,
-      { cidade: "", estado: "", km: null, tempo_trecho_horas: null, tipo_parada: "parada", observacao: "" },
-    ])
-  }
-
-  const removePonto = (index: number) => {
-    setPontosIntermediarios(pontosIntermediarios.filter((_, i) => i !== index))
-  }
-
-  const updatePonto = (index: number, field: keyof PontoIntermediario, value: string | number | null) => {
-    const updated = [...pontosIntermediarios]
-    updated[index] = { ...updated[index], [field]: value }
-    setPontosIntermediarios(updated)
+    setForm({ nome: "", origem_cidade: "", origem_estado: "", destino_cidade: "", destino_estado: "", km_planejado: "", pedagio_planejado: "", tempo_ciclo_esperado_horas: "" })
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -362,198 +331,76 @@ export function QuickRotaModal({
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setIsLoading(false); return }
 
-    const validPontos = pontosIntermediarios
-      .filter(p => p.cidade.trim() !== "")
-      .map((ponto) => ({
-        ...ponto,
-        km: normalizePontoIntermediarioKm(ponto.km),
-        tempo_trecho_horas:
-          ponto.tempo_trecho_horas !== undefined && ponto.tempo_trecho_horas !== null && String(ponto.tempo_trecho_horas) !== ""
-            ? Number(ponto.tempo_trecho_horas)
-            : null,
-        tipo_parada: normalizePontoParadaTipo(ponto.tipo_parada),
-      }))
+    const { data, error } = await supabase.from("rotas").insert({
+      nome: form.nome,
+      origem_cidade: form.origem_cidade || null,
+      origem_estado: form.origem_estado || null,
+      destino_cidade: form.destino_cidade || null,
+      destino_estado: form.destino_estado || null,
+      km_planejado: form.km_planejado ? parseFloat(form.km_planejado) : null,
+      pedagio_planejado: form.pedagio_planejado ? parseFloat(form.pedagio_planejado) : null,
+      tempo_ciclo_esperado_horas: form.tempo_ciclo_esperado_horas ? parseFloat(form.tempo_ciclo_esperado_horas) : null,
+      pontos_intermediarios: [],
+      user_id: user.id,
+    }).select().single()
 
-    const { data, error } = await supabase
-      .from("rotas")
-      .insert({
-        nome: form.nome,
-        origem_cidade: form.origem_cidade || null,
-        origem_estado: form.origem_estado || null,
-        destino_cidade: form.destino_cidade || null,
-        destino_estado: form.destino_estado || null,
-        km_planejado: form.km_planejado ? parseFloat(form.km_planejado) : null,
-        pedagio_planejado: form.pedagio_planejado ? parseFloat(form.pedagio_planejado) : null,
-        tempo_ciclo_esperado_horas: form.tempo_ciclo_esperado_horas ? parseFloat(form.tempo_ciclo_esperado_horas) : null,
-        locais_abastecimento: form.locais_abastecimento || null,
-        pontos_intermediarios: validPontos.length > 0 ? validPontos : [],
-        user_id: user.id,
-      })
-      .select()
-      .single()
-
-    if (!error && data) {
-      onCreated(data)
-      resetForm()
-      onOpenChange(false)
-    }
+    if (!error && data) { onCreated(data); resetForm(); onOpenChange(false) }
     setIsLoading(false)
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Route className="h-5 w-5 text-primary" />
-            Cadastro Rapido - Rota
+            Nova Rota
           </DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid gap-2">
-            <Label>Nome da Rota *</Label>
-            <Input value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} placeholder="Ex: SP-RJ Via Dutra" required />
+        <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+          <div>
+            <Label>Nome da Rota <span className="text-destructive">*</span></Label>
+            <Input className="mt-1.5" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} placeholder="Ex: SP-RJ Via Dutra" required />
           </div>
-
-          {/* Origem */}
-          <div className="rounded-lg border border-border p-3 space-y-3">
-            <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <div className="h-6 w-6 rounded-full bg-success flex items-center justify-center text-success-foreground text-xs font-bold">A</div>
-              Origem
-            </h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-1">
-                <Label className="text-xs">Cidade</Label>
-                <Input value={form.origem_cidade} onChange={(e) => setForm({ ...form, origem_cidade: e.target.value })} placeholder="Cidade" />
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-xs">Estado</Label>
-                <Select value={form.origem_estado} onValueChange={(v) => setForm({ ...form, origem_estado: v })}>
-                  <SelectTrigger><SelectValue placeholder="UF" /></SelectTrigger>
-                  <SelectContent>{ESTADOS.map((uf) => (<SelectItem key={uf} value={uf}>{uf}</SelectItem>))}</SelectContent>
-                </Select>
-              </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground">Origem (Cidade)</Label>
+              <Input className="mt-1.5 text-sm" value={form.origem_cidade} onChange={e => setForm({ ...form, origem_cidade: e.target.value })} placeholder="São Paulo" />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground">Estado</Label>
+              <Select value={form.origem_estado} onValueChange={v => setForm({ ...form, origem_estado: v })}>
+                <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="UF" /></SelectTrigger>
+                <SelectContent>{ESTADOS.map(uf => <SelectItem key={uf} value={uf}>{uf}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground">Destino (Cidade)</Label>
+              <Input className="mt-1.5 text-sm" value={form.destino_cidade} onChange={e => setForm({ ...form, destino_cidade: e.target.value })} placeholder="Rio de Janeiro" />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground">Estado</Label>
+              <Select value={form.destino_estado} onValueChange={v => setForm({ ...form, destino_estado: v })}>
+                <SelectTrigger className="mt-1.5 text-sm"><SelectValue placeholder="UF" /></SelectTrigger>
+                <SelectContent>{ESTADOS.map(uf => <SelectItem key={uf} value={uf}>{uf}</SelectItem>)}</SelectContent>
+              </Select>
             </div>
           </div>
-
-          {/* Pontos Intermediarios */}
-          {pontosIntermediarios.length > 0 && (
-            <div className="space-y-2">
-              {pontosIntermediarios.map((ponto, index) => (
-                <div key={index} className="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-medium text-foreground flex items-center gap-2">
-                      <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-primary text-xs font-bold">
-                        <GripVertical className="h-3 w-3" />
-                      </div>
-                      Ponto {index + 1}
-                    </h4>
-                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => removePonto(index)}>
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-9 gap-2">
-                    <div className="md:col-span-2 grid gap-1">
-                      <Label className="text-xs">Cidade</Label>
-                      <Input value={ponto.cidade} onChange={(e) => updatePonto(index, "cidade", e.target.value)} placeholder="Cidade" />
-                    </div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">UF</Label>
-                      <Select value={ponto.estado} onValueChange={(v) => updatePonto(index, "estado", v)}>
-                        <SelectTrigger><SelectValue placeholder="UF" /></SelectTrigger>
-                        <SelectContent>{ESTADOS.map((uf) => (<SelectItem key={uf} value={uf}>{uf}</SelectItem>))}</SelectContent>
-                      </Select>
-                    </div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">KM</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        value={ponto.km ?? ""}
-                        onChange={(e) => updatePonto(index, "km", e.target.value)}
-                        placeholder="KM da origem"
-                      />
-                    </div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">Trecho (h)</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        value={ponto.tempo_trecho_horas ?? ""}
-                        onChange={(e) => updatePonto(index, "tempo_trecho_horas", e.target.value)}
-                        placeholder="Ex.: 4"
-                      />
-                    </div>
-                    <div className="md:col-span-2 grid gap-1">
-                      <Label className="text-xs">Tipo</Label>
-                      <Select value={normalizePontoParadaTipo(ponto.tipo_parada)} onValueChange={(v) => updatePonto(index, "tipo_parada", normalizePontoParadaTipo(v))}>
-                        <SelectTrigger><SelectValue placeholder="Tipo" /></SelectTrigger>
-                        <SelectContent>
-                          {PONTO_PARADA_TIPO_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">Obs.</Label>
-                      <Input value={ponto.observacao || ""} onChange={(e) => updatePonto(index, "observacao", e.target.value)} placeholder="Observações" />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <Button type="button" variant="outline" size="sm" className="w-full border-dashed bg-transparent" onClick={addPonto}>
-            <Plus className="h-4 w-4 mr-2" />
-            Adicionar Ponto Intermediario
-          </Button>
-
-          {/* Destino */}
-          <div className="rounded-lg border border-border p-3 space-y-3">
-            <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <div className="h-6 w-6 rounded-full bg-destructive flex items-center justify-center text-destructive-foreground text-xs font-bold">B</div>
-              Destino
-            </h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-1">
-                <Label className="text-xs">Cidade</Label>
-                <Input value={form.destino_cidade} onChange={(e) => setForm({ ...form, destino_cidade: e.target.value })} placeholder="Cidade" />
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-xs">Estado</Label>
-                <Select value={form.destino_estado} onValueChange={(v) => setForm({ ...form, destino_estado: v })}>
-                  <SelectTrigger><SelectValue placeholder="UF" /></SelectTrigger>
-                  <SelectContent>{ESTADOS.map((uf) => (<SelectItem key={uf} value={uf}>{uf}</SelectItem>))}</SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-
           <div className="grid grid-cols-3 gap-3">
-            <div className="grid gap-1">
-              <Label className="text-xs">KM Planejado</Label>
-              <Input type="number" value={form.km_planejado} onChange={(e) => setForm({ ...form, km_planejado: e.target.value })} />
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground">KM Planejado</Label>
+              <Input type="number" className="mt-1.5 text-sm" value={form.km_planejado} onChange={e => setForm({ ...form, km_planejado: e.target.value })} />
             </div>
-            <div className="grid gap-1">
-              <Label className="text-xs">Pedagio (R$)</Label>
-              <Input type="number" step="0.01" value={form.pedagio_planejado} onChange={(e) => setForm({ ...form, pedagio_planejado: e.target.value })} />
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground">Pedágio (R$)</Label>
+              <Input type="number" step="0.01" className="mt-1.5 text-sm" value={form.pedagio_planejado} onChange={e => setForm({ ...form, pedagio_planejado: e.target.value })} />
             </div>
-            <div className="grid gap-1">
-              <Label className="text-xs">Tempo Ciclo (h)</Label>
-              <Input type="number" step="0.5" value={form.tempo_ciclo_esperado_horas} onChange={(e) => setForm({ ...form, tempo_ciclo_esperado_horas: e.target.value })} />
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground">Tempo (h)</Label>
+              <Input type="number" step="0.5" className="mt-1.5 text-sm" value={form.tempo_ciclo_esperado_horas} onChange={e => setForm({ ...form, tempo_ciclo_esperado_horas: e.target.value })} />
             </div>
           </div>
-
-          <div className="grid gap-1">
-            <Label className="text-xs">Locais de Abastecimento</Label>
-            <Textarea value={form.locais_abastecimento} onChange={(e) => setForm({ ...form, locais_abastecimento: e.target.value })} placeholder="Ex: Posto Shell KM 150, Posto BR KM 320" rows={2} />
-          </div>
-
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
             <Button type="submit" disabled={isLoading}>{isLoading ? "Salvando..." : "Salvar"}</Button>
           </div>
